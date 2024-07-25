@@ -2,5 +2,8 @@ obj
 bin
 temp
 config
-.vscode
+makefile
 front/filemap.json
+.vscode
+*make
+ServerStorage.make

@@ -66,11 +66,13 @@ endif
 GENERATED :=
 OBJECTS :=
 
+GENERATED += $(OBJDIR)/json_data.o
 GENERATED += $(OBJDIR)/main.o
 GENERATED += $(OBJDIR)/operations.o
 GENERATED += $(OBJDIR)/pch.o
 GENERATED += $(OBJDIR)/session.o
 GENERATED += $(OBJDIR)/web_server.o
+OBJECTS += $(OBJDIR)/json_data.o
 OBJECTS += $(OBJDIR)/main.o
 OBJECTS += $(OBJDIR)/operations.o
 OBJECTS += $(OBJDIR)/pch.o
@@ -139,6 +141,9 @@ endif
 # File Rules
 # #############################################
 
+$(OBJDIR)/json_data.o: src/data/json_data.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/operations.o: src/http_conn/operations.cpp
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"

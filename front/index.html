@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Server Storage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <script type="module" src="scripts.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <div class="banner">
+            <h1>Welcome to Server Storage</h1>
+        </div>
+        <div class="buttons">
+            <button class="upload-btn" onclick="handleUpload()">Upload</button>
+            <button class="download-btn" onclick="handleDownload()">Download</button>
+        </div>
+        <div class="navigation">
+            <button id="backButton" class="nav-button">&lt;</button>
+            <div id="currentDir"></div>
+        </div>
+        <div id="fileTree"></div>
+    </div>
+</body>
+</html>
