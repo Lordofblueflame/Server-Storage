@@ -1,0 +1,12 @@
+{
+  "files": [
+    {"path": "test.txt"},
+    {"path": "test.txt"}
+  ],
+  "subdirectories": {
+    "subdir1": {
+      "files": [{"path": "subdir1/test.txt"}],
+      "subdirectories": {}
+    }
+  }
+}

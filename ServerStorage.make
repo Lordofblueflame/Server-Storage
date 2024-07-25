@@ -67,9 +67,11 @@ GENERATED :=
 OBJECTS :=
 
 GENERATED += $(OBJDIR)/html_server.o
+GENERATED += $(OBJDIR)/json_data.o
 GENERATED += $(OBJDIR)/main.o
 GENERATED += $(OBJDIR)/pch.o
 OBJECTS += $(OBJDIR)/html_server.o
+OBJECTS += $(OBJDIR)/json_data.o
 OBJECTS += $(OBJDIR)/main.o
 OBJECTS += $(OBJDIR)/pch.o
 
@@ -135,6 +137,9 @@ endif
 # File Rules
 # #############################################
 
+$(OBJDIR)/json_data.o: src/data/json_data.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/html_server.o: src/http_conn/html_server.cpp
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
