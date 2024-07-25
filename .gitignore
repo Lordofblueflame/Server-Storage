@@ -1,4 +1,9 @@
 obj
 bin
 temp
+config
+makefile
+front/filemap.json
 .vscode
+*make
+ServerStorage.make
