@@ -66,12 +66,16 @@ endif
 GENERATED :=
 OBJECTS :=
 
-GENERATED += $(OBJDIR)/html_server.o
 GENERATED += $(OBJDIR)/main.o
+GENERATED += $(OBJDIR)/operations.o
 GENERATED += $(OBJDIR)/pch.o
-OBJECTS += $(OBJDIR)/html_server.o
+GENERATED += $(OBJDIR)/session.o
+GENERATED += $(OBJDIR)/web_server.o
 OBJECTS += $(OBJDIR)/main.o
+OBJECTS += $(OBJDIR)/operations.o
 OBJECTS += $(OBJDIR)/pch.o
+OBJECTS += $(OBJDIR)/session.o
+OBJECTS += $(OBJDIR)/web_server.o
 
 # Rules
 # #############################################
@@ -135,7 +139,13 @@ endif
 # File Rules
 # #############################################
 
-$(OBJDIR)/html_server.o: src/http_conn/html_server.cpp
+$(OBJDIR)/operations.o: src/http_conn/operations.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/session.o: src/http_conn/session.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/web_server.o: src/http_conn/web_server.cpp
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) -include $(PCH_PLACEHOLDER) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/main.o: src/main.cpp
