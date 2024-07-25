@@ -69,11 +69,15 @@ OBJECTS :=
 GENERATED += $(OBJDIR)/html_server.o
 GENERATED += $(OBJDIR)/json_data.o
 GENERATED += $(OBJDIR)/main.o
+GENERATED += $(OBJDIR)/operations.o
 GENERATED += $(OBJDIR)/pch.o
 OBJECTS += $(OBJDIR)/html_server.o
 OBJECTS += $(OBJDIR)/json_data.o
 OBJECTS += $(OBJDIR)/main.o
+OBJECTS += $(OBJDIR)/operations.o
 OBJECTS += $(OBJDIR)/pch.o
+OBJECTS += $(OBJDIR)/session.o
+OBJECTS += $(OBJDIR)/web_server.o
 
 # Rules
 # #############################################
