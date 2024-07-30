@@ -2,25 +2,32 @@ let container = null;
 let currentDirElement = null;
 let backButton = null;
 let currentData = null;
-let historyStack = []; // Stack to manage history
-let initialData = null; // Store the initial directory data
+let historyStack = [];
+let initialData = null;
 
-function updateTree(data) {
+function updateTree(data, parentElement, currentDirElement, backButtonElement) {
     if (!data || typeof data !== 'object') {
         return;
     }
 
     currentData = data;
-    displayTree(currentData, container, currentDirElement);
+    displayTree(currentData, parentElement, currentDirElement);
 
-    // Update the back button state
-    if (historyStack.length > 0) {
-        backButton.style.display = 'inline-block';
-        backButton.classList.add('active');
+    if (backButtonElement) {
+        if (historyStack.length > 0) {
+            backButtonElement.style.display = 'inline-block';
+            backButtonElement.classList.add('active');
+        } else {
+            backButtonElement.style.display = 'none';
+            backButtonElement.classList.remove('active');
+        }
     } else {
-        backButton.style.display = 'none';
-        backButton.classList.remove('active');
+        console.error('backButtonElement is null');
     }
+}
+function handleUpload() {
+    const fileInput = document.getElementById('file-input');
+    fileInput.click(); 
 }
 
 function displayTree(data, parentElement, currentDirElement) {
@@ -36,8 +43,8 @@ function displayTree(data, parentElement, currentDirElement) {
             li.classList.add('folder');
 
             li.addEventListener('click', () => {
-                historyStack.push(currentData); // Save the current directory to history
-                updateTree(subDirData); // Navigate into the subdirectory
+                historyStack.push(currentData);
+                updateTree(subDirData, parentElement, currentDirElement, backButton);
             });
 
             ul.appendChild(li);
@@ -69,31 +76,57 @@ function displayTree(data, parentElement, currentDirElement) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    container = document.getElementById('fileTree');
-    currentDirElement = document.getElementById('currentDir');
+    const popup = document.getElementById('popup');
+    const openPopupBtn = document.getElementById('viewTreeBtn');
+    const closePopupBtn = document.getElementById('closePopupBtn');
+    const popupFileTree = document.getElementById('popupFileTree');
+
     backButton = document.getElementById('backButton');
+    currentDirElement = document.getElementById('currentDir');
 
-    if (!container || !currentDirElement || !backButton) {
-        return;
-    }
+    const setInitialDataAndDisplay = (popupFileTree, currentDirElement, backButtonElement) => {
+        fetch('filemap.json')
+            .then(response => response.json())
+            .then(data => {
+                const topLevelData = {
+                    path: data.path,
+                    files: data.files === "" || Array.isArray(data.files) ? data.files : [],
+                    subdirectories: data.subdirectories === "" || typeof data.subdirectories === 'object' ? data.subdirectories : {}
+                };
+                currentDirElement.textContent = topLevelData.path;
+                initialData = topLevelData;
+                updateTree(initialData, popupFileTree, currentDirElement, backButtonElement);
+            })
+            .catch(error => console.error('Error loading JSON:', error));
+    };
 
-    backButton.addEventListener('click', () => {
-        if (historyStack.length > 0) {
-            const previousData = historyStack.pop(); // Get the last entry from history
-            updateTree(previousData); // Go back to the previous directory
+    openPopupBtn.addEventListener('click', () => {
+        setInitialDataAndDisplay(popupFileTree, currentDirElement, backButton);
+        popup.style.display = 'block';
+    });
+
+    closePopupBtn.addEventListener('click', () => {
+        popup.style.display = 'none';
+    });
+
+    window.addEventListener('click', (event) => {
+        if (event.target === popup) {
+            popup.style.display = 'none';
         }
     });
 
-    fetch('filemap.json')
-        .then(response => response.json())
-        .then(data => {
-            const topLevelData = {
-                path: data.path,
-                files: data.files === "" || Array.isArray(data.files) ? data.files : [],
-                subdirectories: data.subdirectories === "" || typeof data.subdirectories === 'object' ? data.subdirectories : {}
-            };
-            initialData = topLevelData; // Set the initial directory data
-            updateTree(initialData);
-        })
-        .catch(error => console.error('Error loading JSON:', error));
+    backButton.addEventListener('click', () => {
+        if (historyStack.length > 0) {
+            const previousData = historyStack.pop();
+            updateTree(previousData, popupFileTree, currentDirElement, backButton);
+        }
+    });
+
+    if (document.getElementById('mainFileTree')) {
+        container = document.getElementById('mainFileTree');
+        setInitialDataAndDisplay(container, currentDirElement, backButton);
+    } else {
+        container = popupFileTree;
+        setInitialDataAndDisplay(container, currentDirElement, backButton);
+    }
 });
