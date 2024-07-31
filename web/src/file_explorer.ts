@@ -1,11 +1,16 @@
-let container = null;
-let currentDirElement = null;
-let backButton = null;
-let currentData = null;
-let historyStack = [];
-let initialData = null;
+let container: HTMLElement | null = null;
+let currentDirElement: HTMLElement | null = null;
+let backButton: HTMLButtonElement | null = null;
+let currentData: any = null;
+let historyStack: any[] = [];
+let initialData: any = null;
 
-function updateTree(data, parentElement, currentDirElement, backButtonElement) {
+function updateTree(
+    data: any,
+    parentElement: HTMLElement,
+    currentDirElement: HTMLElement,
+    backButtonElement: HTMLButtonElement
+): void {
     if (!data || typeof data !== 'object') {
         return;
     }
@@ -25,12 +30,13 @@ function updateTree(data, parentElement, currentDirElement, backButtonElement) {
         console.error('backButtonElement is null');
     }
 }
-function handleUpload() {
-    const fileInput = document.getElementById('file-input');
-    fileInput.click(); 
+
+function handleUpload(): void {
+    const fileInput = document.getElementById('file-input') as HTMLInputElement;
+    fileInput.click();
 }
 
-function displayTree(data, parentElement, currentDirElement) {
+function displayTree(data: any, parentElement: HTMLElement, currentDirElement: HTMLElement): void {
     parentElement.innerHTML = '';
     currentDirElement.textContent = `Current dir: ${data.path}`;
 
@@ -44,7 +50,7 @@ function displayTree(data, parentElement, currentDirElement) {
 
             li.addEventListener('click', () => {
                 historyStack.push(currentData);
-                updateTree(subDirData, parentElement, currentDirElement, backButton);
+                updateTree(subDirData, parentElement, currentDirElement, backButton!);
             });
 
             ul.appendChild(li);
@@ -52,7 +58,7 @@ function displayTree(data, parentElement, currentDirElement) {
     }
 
     if (Array.isArray(data.files)) {
-        data.files.forEach(file => {
+        data.files.forEach((file: { path: string | null; }) => {
             if (file && file.path) {
                 const li = document.createElement('li');
                 li.textContent = file.path;
@@ -76,15 +82,19 @@ function displayTree(data, parentElement, currentDirElement) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    const popup = document.getElementById('popup');
-    const openPopupBtn = document.getElementById('viewTreeBtn');
-    const closePopupBtn = document.getElementById('closePopupBtn');
-    const popupFileTree = document.getElementById('popupFileTree');
+    const popup = document.getElementById('popup') as HTMLElement;
+    const openPopupBtn = document.getElementById('viewTreeBtn') as HTMLButtonElement;
+    const closePopupBtn = document.getElementById('closePopupBtn') as HTMLSpanElement;
+    const popupFileTree = document.getElementById('popupFileTree') as HTMLElement;
 
-    backButton = document.getElementById('backButton');
-    currentDirElement = document.getElementById('currentDir');
+    backButton = document.getElementById('backButton') as HTMLButtonElement;
+    currentDirElement = document.getElementById('currentDir') as HTMLElement;
 
-    const setInitialDataAndDisplay = (popupFileTree, currentDirElement, backButtonElement) => {
+    const setInitialDataAndDisplay = (
+        popupFileTree: HTMLElement,
+        currentDirElement: HTMLElement,
+        backButtonElement: HTMLButtonElement
+    ) => {
         fetch('filemap.json')
             .then(response => response.json())
             .then(data => {
@@ -101,7 +111,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     openPopupBtn.addEventListener('click', () => {
-        setInitialDataAndDisplay(popupFileTree, currentDirElement, backButton);
+        historyStack = [];
+        historyStack.push(initialData.path);
+        setInitialDataAndDisplay(popupFileTree, currentDirElement!, backButton!);
         popup.style.display = 'block';
     });
 
@@ -117,16 +129,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     backButton.addEventListener('click', () => {
         if (historyStack.length > 0) {
-            const previousData = historyStack.pop();
-            updateTree(previousData, popupFileTree, currentDirElement, backButton);
+            const previousData = historyStack.pop()!;
+            updateTree(previousData, popupFileTree, currentDirElement!, backButton!);
         }
     });
 
     if (document.getElementById('mainFileTree')) {
-        container = document.getElementById('mainFileTree');
-        setInitialDataAndDisplay(container, currentDirElement, backButton);
+        container = document.getElementById('mainFileTree') as HTMLElement;
+        setInitialDataAndDisplay(container, currentDirElement!, backButton!);
     } else {
         container = popupFileTree;
-        setInitialDataAndDisplay(container, currentDirElement, backButton);
+        setInitialDataAndDisplay(container, currentDirElement!, backButton!);
     }
 });
+
+(window as any).handleUpload = handleUpload;
