@@ -19,7 +19,7 @@ function updateTree(
     displayTree(currentData, parentElement, currentDirElement);
 
     if (backButtonElement) {
-        if (historyStack.length > 0) {
+        if (historyStack.length > 1) {
             backButtonElement.style.display = 'inline-block';
             backButtonElement.classList.add('active');
         } else {
@@ -128,7 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     backButton.addEventListener('click', () => {
-        if (historyStack.length > 0) {
+        if (historyStack.length > 1) {
             const previousData = historyStack.pop()!;
             updateTree(previousData, popupFileTree, currentDirElement!, backButton!);
         }
