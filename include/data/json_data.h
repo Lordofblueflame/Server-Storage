@@ -7,9 +7,6 @@
 #include <iostream>
 #include "json_structs.h"
 
-namespace fs = boost::filesystem;
-namespace pt = boost::property_tree;
-
 class Json_data {
 public:
     Json_data();

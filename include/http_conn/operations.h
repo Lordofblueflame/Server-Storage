@@ -1,18 +1,19 @@
 #ifndef OPERATIONS_H
 #define OPERATIONS_H
 
-#include <boost/beast.hpp>
-#include <boost/asio.hpp>
-#include <string>
+#include "pch.h"
 
 namespace HTML {
-
-namespace beast = boost::beast;
-namespace http = beast::http;
 
 class Operations {
 public:
     static http::response<http::string_body> handle_request(const http::request<http::string_body>& req, const std::string& doc_root);
+
+private: 
+    static std::string get_content_type(const std::string& path);
+    static http::response<http::string_body> create_directory_listing(const std::string& dir_path, const http::request<http::string_body>& req);
+    static std::vector<std::string> list_directory_contents(const std::string& dir_path);
+
 };
 
 }
