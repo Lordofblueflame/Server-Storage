@@ -1,8 +1,6 @@
+#include "pch.h"
 #include <data/json_data.h>
 #include <data/json_structs.h>
-
-namespace fs = boost::filesystem;
-namespace pt = boost::property_tree;
 
 Json_data::Json_data() {
     try {

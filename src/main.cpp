@@ -1,15 +1,13 @@
 #include "pch.h"
-#include <boost/thread.hpp>
 #include <http_conn/web_server.h>
 #include <data/json_data.h>
 
 int initializeConnetion() {
         try {
-        std::string address = "192.168.0.218"; // Listen on all interfaces
+        std::string address = "ServerStorage.local";
         unsigned short port = 8080;
-        std::string doc_root = "..\\..\\front\\."; 
-
-        HTML::WebServer server(address, port, doc_root);
+        
+        HTML::WebServer server(address, port);
         server.run(); 
     } catch (std::exception const& e) {
         std::cerr << "Error: " << e.what() << std::endl;
@@ -20,6 +18,7 @@ int initializeConnetion() {
 int main(int argc, char* argv[]) {
     try {
         Json_data js;
+        BOOST_LOG_TRIVIAL(info) << "Json data extracted trying to connect" <<  std::endl;
         initializeConnetion();
         
     } catch (const std::exception& ex) {

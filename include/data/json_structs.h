@@ -1,10 +1,7 @@
 #ifndef JSON_STRUCTS_H
 #define JSON_STRUCTS_H
 
-#include <boost/filesystem.hpp>
-#include <vector>
-
-namespace fs = boost::filesystem;
+#include "pch.h"
 
 struct File {
     fs::path path;

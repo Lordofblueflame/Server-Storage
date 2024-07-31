@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Server Storage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <script type="module" src="dist/file_explorer.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <div class="banner">
+            <h1>Welcome to Server Storage</h1>
+        </div>
+        <div class="buttons">
+            <button class="upload-btn" onclick="handleUpload()">Upload
+                <input id="file-input" type="file"/>
+            </button>
+            <button class="download-btn" onclick="handleDownload()">Download</button>
+            <button class="view-tree-btn" id="viewTreeBtn">View File Tree</button>
+        </div>
+    </div>
+    <div id="popup" class="popup">
+        <div class="popup-content">
+            <span class="close-btn" id="closePopupBtn">&times;</span>
+            <h2>File Explorer</h2>
+            <div class="navigation">
+                <button id="backButton" class="nav-button">&lt;</button>
+                <div id="currentDir"></div>
+            </div>
+            <div id="popupFileTree"></div>
+        </div>
+    </div>
+</body>
+</html>
