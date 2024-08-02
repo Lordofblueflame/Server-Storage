@@ -10,9 +10,9 @@ Json_data::Json_data() {
             pt::ptree root_ptree;
             to_ptree(root_dir, root_ptree);
 
-            std::ofstream ofs("..\\..\\config\\filemap.json");
+            std::ofstream ofs(json_file_path);
             if (!ofs) {
-                std::cerr << "Error opening file for writing: ..\\..\\config\\filemap.json" << std::endl;
+                std::cerr << "Error opening file for writing: " << json_file_path << std::endl;
                 return;
             }
             pt::write_json(ofs, root_ptree);

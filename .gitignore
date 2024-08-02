@@ -1,9 +1,8 @@
 obj
 bin
 temp
-config/filemap.json
+filemap.json
 makefile
-web/filemap.json
 .vscode
 *make
 ServerStorage.make

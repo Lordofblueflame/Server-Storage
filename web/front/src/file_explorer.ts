@@ -3,7 +3,11 @@ let currentDirElement: HTMLElement | null = null;
 let backButton: HTMLButtonElement | null = null;
 let currentData: any = null;
 let historyStack: any[] = [];
-let initialData: any = null;
+let initialData: any = {
+    path: null,
+    files: null,
+    subdirectories: null,
+};
 
 function updateTree(
     data: any,

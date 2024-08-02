@@ -4,7 +4,11 @@ let currentDirElement = null;
 let backButton = null;
 let currentData = null;
 let historyStack = [];
-let initialData = null;
+let initialData = {
+    path: null,
+    files: null,
+    subdirectories: null,
+};
 function updateTree(data, parentElement, currentDirElement, backButtonElement) {
     if (!data || typeof data !== 'object') {
         return;
@@ -75,7 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
     backButton = document.getElementById('backButton');
     currentDirElement = document.getElementById('currentDir');
     const setInitialDataAndDisplay = (popupFileTree, currentDirElement, backButtonElement) => {
-        fetch('filemap.json')
+        fetch('../config/filemap.json')
             .then(response => response.json())
             .then(data => {
             const topLevelData = {

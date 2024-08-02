@@ -6,5 +6,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite"
+  },
+  "devDependencies": {
+    "@types/node": "^22.1.0"
   }
 }

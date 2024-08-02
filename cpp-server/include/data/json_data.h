@@ -1,10 +1,7 @@
 #ifndef JSON_DATA_H
 #define JSON_DATA_H
 
-#include <boost/filesystem.hpp>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
-#include <iostream>
+#include "pch.h"
 #include "json_structs.h"
 
 class Json_data {
@@ -17,6 +14,7 @@ private:
     void to_ptree(const Directory& dir, pt::ptree& pt);
 
     fs::path root_path = "X:\\";
+    fs::path json_file_path = "../../web/config/filemap.json";
     Directory root_dir;
 };
 

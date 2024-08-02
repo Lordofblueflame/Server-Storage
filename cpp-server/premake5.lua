@@ -5,7 +5,7 @@ workspace "ServerStorage"
 project "ServerStorage"
     kind "ConsoleApp"
     language "C++"
-    targetdir ("bin/%{cfg.buildcfg}-%{cfg.platform}")
+    targetdir ("../bin/%{cfg.buildcfg}-%{cfg.platform}")
 
     pchheader "include/pch.h"
     pchsource "src/pch.cpp"
