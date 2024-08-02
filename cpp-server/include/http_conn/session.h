@@ -20,7 +20,7 @@ private:
     beast::flat_buffer buffer_;
     http::request<http::string_body> request_;
     http::response<http::string_body> response_;
-    const std::string doc_root_ = fs::absolute(getProjectDir() + "\\web\\front").string();
+    const std::string doc_root_ = fs::absolute(getProjectDir() + "\\web\\Server-Storage-Angular\\dist\\server-storage-angular\\browser").string();
 };
 
 }
