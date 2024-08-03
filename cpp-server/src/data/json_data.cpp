@@ -31,7 +31,9 @@ void Json_data::traverse_directory(const fs::path& dir_path, Directory& dir) {
         for (fs::directory_iterator it(dir_path, fs::directory_options::skip_permission_denied), end; it != end; ++it) {
             const auto& entry = *it;
             if (fs::is_regular_file(entry.path())) {
-                dir.files.push_back(File{entry.path()});
+                std::time_t last_write_time = fs::last_write_time(entry.path());
+                uintmax_t file_size = fs::file_size(entry.path());
+                dir.files.push_back(File{entry.path(), last_write_time, file_size});
             } else if (fs::is_directory(entry.path())) {
                 Directory subdir;
                 traverse_directory(entry.path(), subdir);
@@ -45,6 +47,13 @@ void Json_data::traverse_directory(const fs::path& dir_path, Directory& dir) {
 
 void Json_data::to_ptree(const File& file, pt::ptree& pt) {
     pt.put("path", file.path.string());
+    pt.put("file_size", file.file_size);
+
+    std::time_t t = file.last_write_time;
+    std::tm tm = *std::localtime(&t);
+    std::stringstream ss;
+    ss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    pt.put("last_write_time", ss.str());
 }
 
 void Json_data::to_ptree(const Directory& dir, pt::ptree& pt) {

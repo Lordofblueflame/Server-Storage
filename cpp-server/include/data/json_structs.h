@@ -5,6 +5,8 @@
 
 struct File {
     fs::path path;
+    std::time_t last_write_time;
+    uintmax_t file_size;
 };
 
 struct Directory {

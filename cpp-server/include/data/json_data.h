@@ -14,7 +14,7 @@ private:
     void to_ptree(const Directory& dir, pt::ptree& pt);
 
     fs::path root_path = "X:\\";
-    fs::path json_file_path = "../../web/config/filemap.json";
+    fs::path json_file_path = "../../web/Server-Storage-Angular/filemap.json";
     Directory root_dir;
 };
 
