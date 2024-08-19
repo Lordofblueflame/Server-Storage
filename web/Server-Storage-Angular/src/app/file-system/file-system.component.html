@@ -1,1 +1,18 @@
-<p>file-system works!</p>
+<div *ngIf="errorMessage; else content">
+    <p class="error">{{ errorMessage }}</p>
+  </div>
+  
+  <ng-template #content>
+    <div *ngIf="currentDirectory; else loading">
+      <app-display-file-system
+      [currentDirectory] = "currentDirectory"
+      [currentDirectories] = "currentDirectories"
+      [currentFiles] = "currentFiles"
+      </app-display-file-system>
+    </div>
+    
+    
+    <ng-template #loading>
+      <p>Loading directory...</p>
+    </ng-template>
+  </ng-template>

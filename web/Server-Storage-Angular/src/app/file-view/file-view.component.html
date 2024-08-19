@@ -1,1 +1,7 @@
-<p>file-view works!</p>
+<div class="file-view">
+  <span class="file-name">{{ getNameFromPath(path) }}</span>
+  <div class="file-details">
+    <span class="file-size">Size: {{ formatSize(size) }}</span>
+    <span class="file-modified">Last Modified: {{ last_write_time }}</span>
+  </div>
+</div>

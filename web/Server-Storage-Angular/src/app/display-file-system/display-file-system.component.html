@@ -1,1 +1,31 @@
-<p>display-file-system works!</p>
+<div class="main">
+    <h1>Current Directory: {{ currentDirectory }}</h1>
+    <div
+    *ngFor="let file of currentFiles; let i = index; trackBy: trackByIndex"
+    class="item"
+    [ngClass]="{ 'selected': isSelected(i) }"
+    appSelectableItem
+    [index]="i">
+    <app-file-view 
+      [path]="file.path"
+      [size]="file.file_size"
+      [last_write_time]="file.last_write_time">
+    </app-file-view>
+    <div *ngIf="isDetails()" class="metadata">
+      <span>Size: {{ file.file_size }} bytes</span>
+      <span>Last Modified: {{ file.last_write_time }}</span>
+    </div>
+  </div>
+  
+  <div
+    *ngFor="let dir of currentDirectories; let i = index; trackBy: trackByIndex"
+    class="item"
+    [ngClass]="{ 'selected': isSelected(i + currentFiles.length) }"
+    appSelectableItem
+    [index]="i + currentFiles.length">
+    <app-directory-view 
+      [path]="dir.path"
+      (callback)="navigateToSubdirectory($event)">
+    </app-directory-view>
+  </div>
+  </div>
