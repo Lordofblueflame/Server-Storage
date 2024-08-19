@@ -1,9 +1,9 @@
 obj
 bin
 temp
-config
+filemap.json
 makefile
-front/filemap.json
 .vscode
 *make
 ServerStorage.make
+node_modules
