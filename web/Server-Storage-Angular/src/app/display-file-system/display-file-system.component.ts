@@ -4,11 +4,12 @@ import { DirectoryViewComponent } from '../directory-view/directory-view.compone
 import { FileViewComponent } from '../file-view/file-view.component';
 import { DisplayFormat } from '../enums/display-format';
 import { SelectionService } from '../services/selection.service';
+import { SelectableItemDirective } from '../directives/selectable-item.directive';
 
 @Component({
   selector: 'app-display-file-system',
   standalone: true,
-  imports: [CommonModule, DirectoryViewComponent, FileViewComponent, SelectionService],
+  imports: [CommonModule, DirectoryViewComponent, FileViewComponent, SelectableItemDirective],
   templateUrl: './display-file-system.component.html',
   styleUrl: './display-file-system.component.css'
 })
@@ -18,13 +19,37 @@ export class DisplayFileSystemComponent {
   @Input() currentDirectory: string = "X:\\";
   @Input() currentDirectories: Array<{ path: string }> = [];
   @Input() currentFiles: Array<{ path: string, last_write_time: string, file_size: number }> = [];
-  @Input() onNavigateToSubdirectory!: (subdirectoryPath: string) => void;
+  @Input() navigateToSubdirectory!: (subdirectoryPath: string) => void;
 
   currentDisplayFormat: DisplayFormat = DisplayFormat.Details;
   selectedItems = new Set<number>();
   lastSelectedIndex: number | null = null; 
   constructor(private selectionService: SelectionService) {}
 
+  isDetails(): boolean {
+    return this.currentDisplayFormat === DisplayFormat.Details;
+  }
+
+  getDisplayFormatClass(): string {
+    switch (this.currentDisplayFormat) {
+      case DisplayFormat.List:
+        return 'format-list';
+      case DisplayFormat.Details:
+        return 'format-details';
+      case DisplayFormat.Grid:
+        return 'format-grid';
+      case DisplayFormat.Tiles:
+        return 'format-tiles';
+      default:
+        return 'format-grid';
+    }
+  }
+
+  trackByIndex(index: number, item: any) {
+    return index;
+
+  }
+  
   onMouseDown(event: MouseEvent, index: number) {
     if (event.shiftKey && this.selectionService.lastSelectedIndex !== null) {
       this.selectionService.selectRange(this.selectionService.lastSelectedIndex, index);

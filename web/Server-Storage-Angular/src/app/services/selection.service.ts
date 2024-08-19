@@ -1,8 +1,9 @@
-import { Injectable } from '@angular/core';
+import { Component, Injectable, NgModule } from '@angular/core';
 
 @Injectable({
   providedIn: 'root',
 })
+
 export class SelectionService {
   selectedItems = new Set<number>();
   lastSelectedIndex: number | null = null;

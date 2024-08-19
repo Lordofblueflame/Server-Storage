@@ -2,6 +2,7 @@ import { Directive, Input, HostListener, ElementRef } from '@angular/core';
 import { SelectionService } from '../services/selection.service';
 
 @Directive({
+  standalone: true,
   selector: '[appSelectableItem]'
 })
 export class SelectableItemDirective {
