@@ -38,6 +38,11 @@ http::response<http::string_body> Operations::handle_request(const http::request
         res.prepare_payload();
         return res;
     } else {
+        return unsupported_http_method(req);
+    }
+}
+
+http::response<http::string_body> Operations::unsupported_http_method(const http::request<http::string_body>& req) {
         BOOST_LOG_TRIVIAL(error) << "Unsupported HTTP method: " << req.method_string();
         http::response<http::string_body> res{http::status::bad_request, req.version()};
         res.set(http::field::server, "Beast");
@@ -45,7 +50,6 @@ http::response<http::string_body> Operations::handle_request(const http::request
         res.body() = "Unsupported HTTP method";
         res.prepare_payload();
         return res;
-    }
 }
 
 http::response<http::string_body> Operations::create_directory_listing(const std::string& dir_path, const http::request<http::string_body>& req) {
@@ -82,7 +86,6 @@ std::vector<std::string> Operations::list_directory_contents(const std::string& 
     }
     return filenames;
 }
-
 
 std::string Operations::get_content_type(const std::string& path) {
     static const std::map<std::string, std::string> mime_types = {

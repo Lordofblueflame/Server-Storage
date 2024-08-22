@@ -4,6 +4,7 @@
 
 Json_data::Json_data() {
     try {
+        BOOST_LOG_TRIVIAL(info) << "Json Data Inicialization";
         if (fs::exists(root_path) && fs::is_directory(root_path)) {
             traverse_directory(root_path, root_dir);
 

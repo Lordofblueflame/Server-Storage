@@ -1,16 +1,21 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, NgModule, OnInit } from '@angular/core';
 import { JsonLoaderService } from '../services/json-loader.service';
 import { CommonModule } from '@angular/common';
 import { DisplayFileSystemComponent } from '../display-file-system/display-file-system.component';
+import { HttpClientModule } from '@angular/common/http';
 
 @Component({
   selector: 'app-file-system',
   standalone: true,
-  imports: [CommonModule, DisplayFileSystemComponent],
+  imports: [CommonModule, 
+    DisplayFileSystemComponent,
+    HttpClientModule
+  ],
   templateUrl: './file-system.component.html',
   styleUrls: ['./file-system.component.css'],
-  providers: [JsonLoaderService]
+  providers: [JsonLoaderService],
 })
+
 export class FileSystemComponent implements OnInit {
   currentDirectory: string = "X:\\";
   currentDirectories: Array<{ path: string }> = [];
@@ -25,7 +30,7 @@ export class FileSystemComponent implements OnInit {
   }
 
   async loadDirectory(path: string): Promise<void> {
-    console.log("Loading directory with path: ${path}");
+    console.log('Loading directory with path: ${path}');
     this.errorMessage = null;
 
     try {
@@ -38,7 +43,7 @@ export class FileSystemComponent implements OnInit {
       } else {
         this.currentDirectories = [];
         this.currentFiles = [];
-        this.errorMessage = "Directory not found: ${path}";
+        this.errorMessage = 'Directory not found: ${path}';
       }
     } catch (error) {
       console.error('Error loading directory:', error);
@@ -48,8 +53,8 @@ export class FileSystemComponent implements OnInit {
     }
   }
 
-  onNavigateToSubdirectory(subdirectoryPath: string): void {
-    console.log("Navigating to subdirectory: ${subdirectoryPath}");
+  navigateToSubdirectory(subdirectoryPath: string): void {
+    console.log('Navigating to subdirectory: ${subdirectoryPath}');
     this.loadDirectory(subdirectoryPath);
   }
 }

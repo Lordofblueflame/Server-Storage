@@ -1,10 +1,10 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import { Dictionary } from '../interfaces/File-explorer.interfaces';
+import { Dictionary } from '../interfaces/File-explorer.interface';
 
 @Injectable({
-  providedIn: 'root'
+  providedIn: 'root',
 })
 export class JsonLoaderService {
   private dataUrl = 'assets/filemap.json';
@@ -15,7 +15,7 @@ export class JsonLoaderService {
     currentDirectory: string;
     currentDirectories: Array<{ path: string }>;
     currentFiles: Array<{ path: string, last_write_time: string, file_size: number }>;
-  } | null> {
+    } | null> {
     console.log(`Loading directory for path: ${path}`);
     try {
       const directory = await firstValueFrom(this.http.get<Dictionary>(this.dataUrl));
@@ -26,14 +26,14 @@ export class JsonLoaderService {
   
       if (foundDirectory) {
         const currentDirectories = foundDirectory.subdirectories && typeof foundDirectory.subdirectories === 'object'
-          ? Object.values(foundDirectory.subdirectories).map((sub: Dictionary) => ({ path: sub.path }))
+          ? Object.values(foundDirectory.subdirectories).map((sub: any) => ({ path: sub.path }))
           : [];
   
         const currentFiles = Array.isArray(foundDirectory.files)
           ? foundDirectory.files.map(file => ({
               path: file.path,
               last_write_time: file.last_write_time,
-              file_size: Number(file.file_size)
+              file_size: file.file_size
             }))
           : [];
   
@@ -51,7 +51,6 @@ export class JsonLoaderService {
       return null;
     }
   }
-
   private findDirectoryByPath(directory: Dictionary, path: string): Dictionary | null {
     console.log(`Searching for path "${path}" in directory:`, directory);
 
