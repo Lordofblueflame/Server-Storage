@@ -2,20 +2,22 @@
 #define JSON_DATA_H
 
 #include "pch.h"
-#include "json_structs.h"
+#include "file_system_traversal.h"
+#include "json_serializer.h"
+#include "json_writer.h"
+#include "../structs/file.h"
+#include "../structs/dictionary.h"
 
-class Json_data {
+class Json_Data {
 public:
-    Json_data();
-
+    Json_Data();
 private:
-    void traverse_directory(const fs::path& dir_path, Directory& dir);
-    void to_ptree(const File& file, pt::ptree& pt);
-    void to_ptree(const Directory& dir, pt::ptree& pt);
+    File_System_Traversal traversal;
+    Json_Serializer serializer;
+    Json_Writer writer;
 
     fs::path root_path = "X:\\";
     fs::path json_file_path = "../../web/Server-Storage-Angular/assets/filemap.json";
-    Directory root_dir;
 };
 
 #endif // JSON_DATA_H

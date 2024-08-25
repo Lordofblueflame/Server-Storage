@@ -3,7 +3,7 @@
 
 namespace HTML {
 
-WebServer::WebServer(const std::string& address, unsigned short port)
+Web_Server::Web_Server(const std::string& address, unsigned short port)
     : address_(address), port_(port), ioc_(), acceptor_(ioc_) {
     
     boost::asio::ip::tcp::resolver resolver(ioc_);
@@ -13,16 +13,16 @@ WebServer::WebServer(const std::string& address, unsigned short port)
     acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
     acceptor_.bind(endpoint);
     acceptor_.listen();
-    BOOST_LOG_TRIVIAL(info) << "WebServer initialized at address: " << address_ << " on port: " << port_;
+    BOOST_LOG_TRIVIAL(info) << "Web_Server initialized at address: " << address_ << " on port: " << port_;
     }
 
-void WebServer::run() {
+void Web_Server::run() {
     start_accept();
-    BOOST_LOG_TRIVIAL(info) << "WebServer is running at address: " << address_ << " on port: " << port_;
+    BOOST_LOG_TRIVIAL(info) << "Web_Server is running at address: " << address_ << " on port: " << port_;
     ioc_.run();
 }
 
-void WebServer::start_accept() {
+void Web_Server::start_accept() {
     acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
         if (!ec) {
             auto remote_endpoint = socket.remote_endpoint();

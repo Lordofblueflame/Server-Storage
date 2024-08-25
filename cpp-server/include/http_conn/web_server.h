@@ -7,9 +7,9 @@
 
 namespace HTML {
 
-class WebServer {
+class Web_Server {
 public:
-    WebServer(const std::string& address, unsigned short port);
+    Web_Server(const std::string& address, unsigned short port);
 
     void run();
 
