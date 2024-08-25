@@ -20,6 +20,7 @@ int initializeConnetion() {
 
 int main(int argc, char* argv[]) {
     try {
+        
         //Json_Data js;
         BOOST_LOG_TRIVIAL(info) << "Json data extracted trying to connect" <<  std::endl;
         std::string search_term = "desktop.ini";
