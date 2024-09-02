@@ -29,9 +29,10 @@ int main(int argc, char* argv[]) {
         BOOST_LOG_TRIVIAL(info) << search_term << " " << json_file_path <<std::endl;
 
         File_Searcher searcher(search_term, json_file_path);
-        std::string search_results = searcher.search();
-
-        Search_Result result(search_results);
+        std::string command = searcher.search_command();
+        searcher.exec_search_command(command);
+        searcher.display_search_results();
+        
 
         result.display();
         initializeConnetion();

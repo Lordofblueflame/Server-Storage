@@ -1,0 +1,3 @@
+I'm using Googletests with bazel learning new things so best way to learn how to compile them is on 
+https://google.github.io/googletest/quickstart-bazel.html 
+Those probably will be easy tests that i can write just to have my app tested

@@ -1,7 +1,7 @@
 #include <data/searching/file_searcher.h>
 #include "pch.h"
 
-std::string exec_command(const std::string& cmd) {
+void File_Searcher::exec_search_command(const std::string& cmd) {
     BOOST_LOG_TRIVIAL(info) << "Executing command: " << cmd;
     
     std::shared_ptr<FILE> pipe(popen(cmd.c_str(), "r"), pclose);
@@ -22,17 +22,17 @@ std::string exec_command(const std::string& cmd) {
         BOOST_LOG_TRIVIAL(error) << "Error occurred while reading command output.";
     }
 
-    return result_stream.str();
+    search_results = result_stream.str();
 }
 
 File_Searcher::File_Searcher(std::string search_term,  std::string file_path)
-    : searchTerm(search_term), filePath(file_path) {
+    : searchTerm(search_term), filePath(file_path) /* search_method too */ {
     BOOST_LOG_TRIVIAL(info) << "File Searcher" <<  std::endl;
 }
 
 
-std::string File_Searcher::search() {
-    string method;   
+std::string File_Searcher::search_command() {
+    std::string method;   
     if(search_method == Search_Method::ripgrep) {
         method = "rg";
     }
@@ -44,5 +44,9 @@ std::string File_Searcher::search() {
     std::string command = method + " \""+searchTerm+"\" " + filePath; // method "searchTerm" filePath
     BOOST_LOG_TRIVIAL(info) << "Execute command" <<  std::endl;
     
-    return exec_command(command);
+    return command;
+}
+
+void File_Searcher::display_search_results() {
+    std::cout << search_results << std::endl;
 }
