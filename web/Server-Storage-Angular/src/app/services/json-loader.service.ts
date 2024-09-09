@@ -26,7 +26,7 @@ export class JsonLoaderService {
   
       if (foundDirectory) {
         const currentDirectories = foundDirectory.subdirectories && typeof foundDirectory.subdirectories === 'object'
-          ? Object.values(foundDirectory.subdirectories).map((sub: any) => ({ path: sub.path }))
+          ? Object.values(foundDirectory.subdirectories).map((sub: Dictionary) => ({ path: sub.path }))
           : [];
   
         const currentFiles = Array.isArray(foundDirectory.files)
@@ -51,27 +51,58 @@ export class JsonLoaderService {
       return null;
     }
   }
-  private findDirectoryByPath(directory: Dictionary, path: string): Dictionary | null {
+
+  findDirectoryByPath(directory: Dictionary, path: string): Dictionary | null {
     console.log(`Searching for path "${path}" in directory:`, directory);
-
-    if (directory.path === path) {
-      console.log(`Match found: ${directory.path}`);
-      return directory;
+  
+    const pathSegments = path.split('\\').filter(Boolean);
+    console.log(`Path segments:`, pathSegments);
+    
+    const targetDepth = pathSegments.length;
+    console.log(`Target depth: ${targetDepth}`);
+  
+    let currentDir: Dictionary | null = directory;
+    let currentDepth = 0;
+  
+    if (currentDir.path === 'C:\\') {
+      console.log(`Root directory matched: ${currentDir.path}`);
+      currentDepth++;
+    } else {
+      console.warn(`Root directory not matched, expected "C:\\", found: ${currentDir.path}`);
+      return null;
     }
-
-    if (directory.subdirectories && typeof directory.subdirectories === 'object') {
-      for (let key in directory.subdirectories) {
-        if (directory.subdirectories.hasOwnProperty(key)) {
-          const subdirectory = directory.subdirectories[key];
-          const found = this.findDirectoryByPath(subdirectory, path);
-          if (found) {
-            return found;
-          }
+  
+    while (currentDir && currentDepth < targetDepth) {
+      const segment = pathSegments[currentDepth];
+      console.log(`At depth ${currentDepth}, searching for segment: "${segment}"`);
+  
+      const subdirectories = currentDir.subdirectories as Record<string, Dictionary>;
+      
+      if (subdirectories) {
+        const subdirectoryKey = Object.keys(subdirectories).find(key => {
+          return subdirectories[key].path.endsWith(segment);
+        });
+  
+        if (subdirectoryKey) {
+          currentDir = subdirectories[subdirectoryKey];
+          console.log(`Matched subdirectory: "${subdirectoryKey}" at depth ${currentDepth}, moving deeper.`);
+          currentDepth++;
+        } else {
+          console.warn(`No match found for segment: "${segment}" at depth ${currentDepth}`);
+          return null;
         }
+      } else {
+        console.warn(`No subdirectories to search at depth ${currentDepth}`);
+        return null;
       }
     }
-
-    console.warn(`No match found for path: ${path}`);
-    return null;
+  
+    if (currentDir && currentDir.path === path) {
+      console.log(`Successfully found the directory for path: "${path}"`);
+      return currentDir;
+    } else {
+      console.warn(`Final directory path does not match. Expected "${path}", found "${currentDir?.path}"`);
+      return null;
+    }
   }
 }
