@@ -11,9 +11,12 @@ export class DirectoryViewComponent {
   @Input() path: string = '';
   @Output() callback = new EventEmitter<string>();
 
-  handleClick(): void {
+  handleClick(event: Event): void {
+    event.preventDefault();
+    console.log('Emitting path:', this.path);
     this.callback.emit(this.path);
   }
+  
 
   getNameFromPath(path: string): string {
     return path.split('\\').pop() || '';

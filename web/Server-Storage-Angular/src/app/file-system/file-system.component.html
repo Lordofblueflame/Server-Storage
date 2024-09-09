@@ -7,11 +7,10 @@
       <app-display-file-system
       [currentDirectory] = "currentDirectory"
       [currentDirectories] = "currentDirectories"
-      [currentFiles] = "currentFiles">
+      [currentFiles] = "currentFiles"
+      (directoryChange)="navigateToSubdirectory($event)">
     </app-display-file-system>
-
     </div>
-    
     
     <ng-template #loading>
       <p>Loading directory...</p>

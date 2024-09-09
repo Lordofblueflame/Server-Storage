@@ -1,0 +1,24 @@
+/* file-view.component.css */
+
+.file-view {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    background-color: #fafafa;
+  }
+  
+  .file-view .file-name {
+    font-size: 1.2em;
+  }
+  
+  .file-view .file-details {
+    margin-left: 20px;
+    color: #777;
+  }
+  
+  .file-size, .file-modified {
+    display: block;
+  }
+  

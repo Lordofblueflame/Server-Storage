@@ -1,0 +1,21 @@
+/* directory-view.component.css */
+
+.directory-view {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    background-color: #fafafa;
+  }
+  
+  .directory-view a {
+    font-size: 1.2em;
+    color: #1e90ff;
+    text-decoration: none;
+  }
+  
+  .directory-view a:hover {
+    text-decoration: underline;
+  }
+  

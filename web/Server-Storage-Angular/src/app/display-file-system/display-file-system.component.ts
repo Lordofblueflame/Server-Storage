@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { DirectoryViewComponent } from '../directory-view/directory-view.component';
 import { FileViewComponent } from '../file-view/file-view.component';
@@ -19,7 +19,7 @@ export class DisplayFileSystemComponent {
   @Input() currentDirectory: string = "C:\\";
   @Input() currentDirectories: Array<{ path: string }> = [];
   @Input() currentFiles: Array<{ path: string, last_write_time: string, file_size: number }> = [];
-  @Input() navigateToSubdirectory!: (subdirectoryPath: string) => void;
+  @Output() directoryChange = new EventEmitter<string>();
 
   currentDisplayFormat: DisplayFormat = DisplayFormat.Details;
   selectedItems = new Set<number>();
@@ -72,6 +72,10 @@ export class DisplayFileSystemComponent {
 
   isSelected(index: number): boolean {
     return this.selectionService.isSelected(index);
+  }
+
+  onDirectoryClick(subdirectoryPath: string): void {
+    this.directoryChange.emit(subdirectoryPath);
   }
 }
 

@@ -29,7 +29,7 @@ export class FileSystemComponent implements OnInit {
     this.loadDirectory(this.currentDirectory);
   }
 
-  async loadDirectory(path: string): Promise<void> {
+  public async loadDirectory(path: string): Promise<void> {
     console.log('Loading directory with path: ${path}');
     this.errorMessage = null;
 
@@ -53,8 +53,13 @@ export class FileSystemComponent implements OnInit {
     }
   }
 
-  navigateToSubdirectory(subdirectoryPath: string): void {
-    console.log('Navigating to subdirectory: ${subdirectoryPath}');
-    this.loadDirectory(subdirectoryPath);
+  async navigateToSubdirectory(subdirectoryPath: string): Promise<void> {
+    console.log('Navigating to subdirectory with path:', subdirectoryPath);
+    try {
+      await this.loadDirectory(subdirectoryPath);
+    } catch (error) {
+      console.error('Error during navigation:', error);
+    }
   }
+  
 }

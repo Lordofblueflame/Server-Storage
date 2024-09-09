@@ -1,0 +1,81 @@
+/* display-file-system.component.css */
+
+.main {
+    padding: 20px;
+    font-family: Arial, sans-serif;
+  }
+  
+  h1 {
+    color: #333;
+    margin-bottom: 20px;
+  }
+  
+  .item {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    transition: background-color 0.3s;
+  }
+  
+  .item:hover {
+    background-color: #f0f0f0;
+  }
+  
+  .item.selected {
+    background-color: #e0e0e0;
+    border-color: #bbb;
+  }
+  
+  .metadata {
+    margin-top: 5px;
+    font-size: 0.9em;
+    color: #555;
+  }
+  
+  .metadata span {
+    display: block;
+  }
+  
+  .file-view, .directory-view {
+    display: flex;
+    align-items: center;
+  }
+  
+  .file-view .file-name, .directory-view a {
+    margin-left: 10px;
+    font-weight: bold;
+  }
+  
+  .file-view .file-details {
+    margin-left: 20px;
+    color: #777;
+  }
+  
+  .directory-view a {
+    color: #1e90ff;
+    text-decoration: none;
+  }
+  
+  .directory-view a:hover {
+    text-decoration: underline;
+  }
+  
+  /* Google Icon integration */
+  .item::before {
+    font-family: 'Material Icons';
+    margin-right: 10px;
+    font-size: 24px;
+    color: #555;
+  }
+  
+  .item.file::before {
+    content: 'insert_drive_file'; /* File icon */
+  }
+  
+  .item.directory::before {
+    content: 'folder'; /* Folder icon */
+  }
+  
