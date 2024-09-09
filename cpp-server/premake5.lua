@@ -30,15 +30,15 @@ project "ServerStorage"
         links {
             "ws2_32",
             "wsock32",
-            "boost_filesystem-mgw13-mt-x64-1_85",
-            "boost_log_setup-mgw13-mt-x64-1_85",
-            "boost_log-mgw13-mt-x64-1_85",
-            "boost_wserialization-mgw13-mt-x64-1_85",
-            "boost_thread-mgw13-mt-x64-1_85",
-            "boost_system-mgw13-mt-x64-1_85",
-            "boost_serialization-mgw13-mt-x64-1_85",
-            "boost_chrono-mgw13-mt-x64-1_85",
-            "boost_atomic-mgw13-mt-x64-1_85"
+            "boost_filesystem-mgw13-mt-x64-1_86",
+            "boost_log_setup-mgw13-mt-x64-1_86",
+            "boost_log-mgw13-mt-x64-1_86",
+            "boost_wserialization-mgw13-mt-x64-1_86",
+            "boost_thread-mgw13-mt-x64-1_86",
+            "boost_system-mgw13-mt-x64-1_86",
+            "boost_serialization-mgw13-mt-x64-1_86",
+            "boost_chrono-mgw13-mt-x64-1_86",
+            "boost_atomic-mgw13-mt-x64-1_86"
         }
 
     filter "configurations:Release"
@@ -48,15 +48,15 @@ project "ServerStorage"
         links {
             "ws2_32",
             "wsock32",
-            "boost_filesystem-mgw13-mt-x64-1_85",
-            "boost_log_setup-mgw13-mt-x64-1_85",
-            "boost_log-mgw13-mt-x64-1_85",
-            "boost_wserialization-mgw13-mt-x64-1_85",
-            "boost_thread-mgw13-mt-x64-1_85",
-            "boost_system-mgw13-mt-x64-1_85",
-            "boost_serialization-mgw13-mt-x64-1_85",
-            "boost_chrono-mgw13-mt-x64-1_85",
-            "boost_atomic-mgw13-mt-x64-1_85"
+            "boost_filesystem-mgw13-mt-x64-1_86",
+            "boost_log_setup-mgw13-mt-x64-1_86",
+            "boost_log-mgw13-mt-x64-1_86",
+            "boost_wserialization-mgw13-mt-x64-1_86",
+            "boost_thread-mgw13-mt-x64-1_86",
+            "boost_system-mgw13-mt-x64-1_86",
+            "boost_serialization-mgw13-mt-x64-1_86",
+            "boost_chrono-mgw13-mt-x64-1_86",
+            "boost_atomic-mgw13-mt-x64-1_86"
         }
 
     filter "platforms:x64"

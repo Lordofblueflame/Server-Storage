@@ -2,7 +2,6 @@
 #include <http_conn/web_server.h>
 #include <data/json_data.h>
 #include <data/searching/file_searcher.h>
-#include <data/searching/search_result.h>
 
 int initializeConnetion() {
     try {
@@ -21,7 +20,7 @@ int initializeConnetion() {
 int main(int argc, char* argv[]) {
     try {
         
-        //Json_Data js;
+        //Json_Data json;
         BOOST_LOG_TRIVIAL(info) << "Json data extracted trying to connect" <<  std::endl;
         std::string search_term = "desktop.ini";
         std::string json_file_path = "filemap.json";
@@ -33,8 +32,6 @@ int main(int argc, char* argv[]) {
         searcher.exec_search_command(command);
         searcher.display_search_results();
         
-
-        result.display();
         initializeConnetion();
         
     } catch (const std::exception& ex) {

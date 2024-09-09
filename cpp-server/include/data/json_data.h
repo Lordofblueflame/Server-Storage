@@ -16,9 +16,7 @@ private:
     Json_Serializer _serializer;
     Json_Writer _writer;
 
-    Json_Data(File_System_Traversal traversal, Json_Serializer serializer, Json_Writer writer);
-    
-    fs::path root_path = "X:\\";
+    fs::path root_path = "C:\\";
     fs::path json_file_path = "../../web/Server-Storage-Angular/assets/filemap.json";
 };
 

@@ -3,8 +3,10 @@
 #include <structs/file.h>
 #include <structs/dictionary.h>
 
-Json_Data::Json_Data(File_System_Traversal traversal, Json_Serializer serializer, Json_Writer writer) 
-    : _traversal(traversal), _serializer(serializer), _writer(writer) {
+Json_Data::Json_Data() {
+    _traversal = File_System_Traversal();
+    _serializer = Json_Serializer();
+    _writer = Json_Writer();
     try {
         BOOST_LOG_TRIVIAL(info) << "Json Data Initialization";
 

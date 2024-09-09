@@ -16,7 +16,7 @@ import { SelectableItemDirective } from '../directives/selectable-item.directive
 
 
 export class DisplayFileSystemComponent {
-  @Input() currentDirectory: string = "X:\\";
+  @Input() currentDirectory: string = "C:\\";
   @Input() currentDirectories: Array<{ path: string }> = [];
   @Input() currentFiles: Array<{ path: string, last_write_time: string, file_size: number }> = [];
   @Input() navigateToSubdirectory!: (subdirectoryPath: string) => void;

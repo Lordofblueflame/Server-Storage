@@ -17,7 +17,7 @@ import { HttpClientModule } from '@angular/common/http';
 })
 
 export class FileSystemComponent implements OnInit {
-  currentDirectory: string = "X:\\";
+  currentDirectory: string = "C:\\";
   currentDirectories: Array<{ path: string }> = [];
   currentFiles: Array<{ path: string, last_write_time: string, file_size: number }> = [];
   errorMessage: string | null = null;
