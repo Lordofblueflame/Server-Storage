@@ -1,16 +1,1 @@
-#menu {
-    width: 35%;
-    border: 1px solid blue;  
-    background-color: yellow; 
-}
-#main {
-    width: 65%;
-    display: inline-block;
-    border: 1px solid blue;    
-    background-color: red;
-}
-#header {
-    display: flex;
-    border: 1px solid blue;  
-    background-color: rgb(37, 197, 91); 
-}
+

@@ -1,21 +1,22 @@
-/* directory-view.component.css */
-
 .directory-view {
-    display: flex;
-    align-items: center;
-    padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 5px;
-    background-color: #fafafa;
+  padding: 10px;
+  text-align: center;
+  background-color: #f0f0f0;
+  border-radius: 8px;
+  transition: box-shadow 0.2s ease-in-out;
+
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
-  
-  .directory-view a {
-    font-size: 1.2em;
-    color: #1e90ff;
+
+  .icon {
+    margin-bottom: 10px;
+    font-size: 3rem;
+  }
+
+  a {
     text-decoration: none;
+    font-weight: bold;
+    color: #333;
   }
-  
-  .directory-view a:hover {
-    text-decoration: underline;
-  }
-  
+}

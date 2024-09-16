@@ -1,28 +1,30 @@
 <div class="main">
   <h1>Current Directory: {{ currentDirectory }}</h1>
-  
-  <div
-    *ngFor="let file of currentFiles; let i = index; trackBy: trackByIndex"
-    class="item file"
-    [ngClass]="{ 'selected': isSelected(i) }"
-    appSelectableItem
-    [index]="i">
-    <app-file-view 
-      [path]="file.path"
-      [size]="file.file_size"
-      [last_write_time]="file.last_write_time">
-    </app-file-view>
-  </div>
-  
-  <div
-    *ngFor="let dir of currentDirectories; let i = index; trackBy: trackByIndex"
-    class="item directory"
-    [ngClass]="{ 'selected': isSelected(i + currentFiles.length) }"
-    appSelectableItem
-    [index]="i + currentFiles.length">
-    <app-directory-view 
-      [path]="dir.path"
-      (callback)="onDirectoryClick($event)">
-    </app-directory-view>
+
+  <div class="grid-container">
+    <div
+      *ngFor="let dir of currentDirectories; let i = index; trackBy: trackByIndex"
+      class="item directory"
+      [ngClass]="{ 'selected': isSelected(i + currentFiles.length) }"
+      appSelectableItem
+      [index]="i + currentFiles.length">
+      <app-directory-view 
+        [path]="dir.path">
+        (callback)="onDirectoryClick($event)">
+      </app-directory-view>
+    </div>
+
+    <div
+      *ngFor="let file of currentFiles; let i = index; trackBy: trackByIndex"
+      class="item file"
+      [ngClass]="{ 'selected': isSelected(i) }"
+      appSelectableItem
+      [index]="i">
+      <app-file-view 
+        [path]="file.path"
+        [size]="file.file_size"
+        [last_write_time]="file.last_write_time">
+      </app-file-view>
+    </div>
   </div>
 </div>
