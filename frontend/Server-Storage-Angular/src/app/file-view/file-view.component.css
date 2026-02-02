@@ -1,0 +1,28 @@
+.file-view {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    margin: 5px 0;
+    background-color: #f9f9f9;
+  }
+  
+  .file-name {
+    font-weight: bold;
+    display: block;
+    font-size: 1.2em;
+  }
+  
+  .file-details {
+    font-size: 0.9em;
+    color: #666;
+  }
+  
+  .file-size,
+  .file-modified {
+    display: block;
+  }
+  
+  .file-size {
+    margin-bottom: 5px;
+  }
+  
