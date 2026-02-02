@@ -1,0 +1,87 @@
+############################################
+# FILES
+############################################
+
+# CMake / Ninja generated files
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Makefile
+filemap.json
+ServerStorage.make
+
+# Ninja
+*.ninja
+
+# Logs
+*.log
+
+# Binaries / artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.pdb
+
+# Temporary / backup files
+*.tmp
+*.temp
+*.swp
+*.bak
+*.old
+*~
+.DS_Store
+Thumbs.db
+
+# Other files
+*.pdf
+
+############################################
+# DIRECTORIES
+############################################
+
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+out/
+obj/
+bin/
+temp/
+
+# IDEs
+.idea/
+.vscode/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-relwithdebinfo/
+cmake-build-minsizerel/
+
+# Toolchains / SDKs
+mingw/
+toolchains/
+
+# Node tooling (if used)
+node_modules/
+
+# Logs
+logs/
+backend/logs/
+
+# Vendor libraries (default: ignore)
+backend/HostIndexer/lib/*
+
+
+############################################
+# EXCEPTIONS (ALLOW LIST)
+############################################
+
+# Keep specific vendored library
+!backend/HostIndexer/lib/lib.md
