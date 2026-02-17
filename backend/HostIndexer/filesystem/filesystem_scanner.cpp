@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <string_view>
 #include <system_error>
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -107,6 +109,67 @@ void append_diagnostic(RawScanResult& result,
     );
 }
 
+bool wildcard_match(const std::string_view pattern,
+                    const std::string_view text,
+                    const bool case_sensitive) {
+    auto char_equal = [case_sensitive](const char lhs, const char rhs) -> bool {
+        if (case_sensitive) {
+            return lhs == rhs;
+        }
+        return std::tolower(static_cast<unsigned char>(lhs)) == std::tolower(static_cast<unsigned char>(rhs));
+    };
+
+    std::size_t pattern_index = 0;
+    std::size_t text_index = 0;
+    std::size_t star_index = std::string_view::npos;
+    std::size_t star_text_index = 0;
+
+    while (text_index < text.size()) {
+        if (pattern_index < pattern.size() &&
+            (pattern[pattern_index] == '?' || char_equal(pattern[pattern_index], text[text_index]))) {
+            ++pattern_index;
+            ++text_index;
+            continue;
+        }
+
+        if (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
+            star_index = pattern_index++;
+            star_text_index = text_index;
+            continue;
+        }
+
+        if (star_index != std::string_view::npos) {
+            pattern_index = star_index + 1;
+            text_index = ++star_text_index;
+            continue;
+        }
+
+        return false;
+    }
+
+    while (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
+        ++pattern_index;
+    }
+
+    return pattern_index == pattern.size();
+}
+
+bool matches_any_glob(const std::vector<std::string>& globs,
+                      const std::string_view normalized_path,
+                      const std::string_view entry_name,
+                      const bool case_sensitive) {
+    for (const auto& glob : globs) {
+        if (glob.empty()) {
+            continue;
+        }
+        if (wildcard_match(glob, normalized_path, case_sensitive) ||
+            wildcard_match(glob, entry_name, case_sensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void fill_entry_metadata(const std::filesystem::path& path,
                          const std::filesystem::file_status status,
                          RawEntry& entry,
@@ -145,15 +208,14 @@ void fill_entry_metadata(const std::filesystem::path& path,
 bool collect_one_entry(const std::filesystem::path& path,
                        const bool is_root,
                        RawScanResult& result,
-                       const std::size_t max_entries) {
-    if (result.entries.size() >= max_entries) {
-        append_diagnostic(
-            result,
-            ScanErrorCode::EntryLimitExceeded,
-            ScanSeverity::Error,
-            "Scanner entry limit exceeded."
-        );
-        return false;
+                       const ScanOptions& options,
+                       bool* out_included = nullptr,
+                       bool* out_disable_recursion = nullptr) {
+    if (out_included != nullptr) {
+        *out_included = false;
+    }
+    if (out_disable_recursion != nullptr) {
+        *out_disable_recursion = false;
     }
 
     std::error_code ec;
@@ -169,6 +231,8 @@ bool collect_one_entry(const std::filesystem::path& path,
         return false;
     }
 
+    const std::string entry_name = std::filesystem::path(normalized_path).filename().generic_string();
+
     const auto status = std::filesystem::symlink_status(path, ec);
     if (ec) {
         append_diagnostic(
@@ -181,12 +245,47 @@ bool collect_one_entry(const std::filesystem::path& path,
         return false;
     }
 
+    const bool is_directory = status.type() == std::filesystem::file_type::directory;
+    const bool excluded_by_policy = !is_root &&
+        matches_any_glob(options.exclude_globs, normalized_path, entry_name, options.case_sensitive_globs);
+    const bool included_by_policy = is_root ||
+        options.include_globs.empty() ||
+        matches_any_glob(options.include_globs, normalized_path, entry_name, options.case_sensitive_globs);
+
+    bool include_entry = false;
+    if (is_directory) {
+        include_entry = !excluded_by_policy;
+    } else {
+        include_entry = included_by_policy && !excluded_by_policy;
+    }
+
+    if (!include_entry) {
+        if (out_disable_recursion != nullptr) {
+            *out_disable_recursion = is_directory && excluded_by_policy;
+        }
+        return true;
+    }
+
+    if (result.entries.size() >= options.max_entries) {
+        append_diagnostic(
+            result,
+            ScanErrorCode::EntryLimitExceeded,
+            ScanSeverity::Error,
+            "Scanner entry limit exceeded."
+        );
+        return false;
+    }
+
     RawEntry entry;
     entry.normalized_path = normalized_path;
     entry.parent_path = is_root ? std::string() : std::filesystem::path(normalized_path).parent_path().generic_string();
-    entry.name = std::filesystem::path(normalized_path).filename().generic_string();
+    entry.name = entry_name;
     fill_entry_metadata(path, status, entry, result);
     result.entries.push_back(std::move(entry));
+
+    if (out_included != nullptr) {
+        *out_included = true;
+    }
     return true;
 }
 
@@ -233,7 +332,7 @@ RawScanResult LocalFilesystemScanner::scan(const std::filesystem::path& root_pat
         return result;
     }
 
-    if (!collect_one_entry(root_path, true, result, options.max_entries)) {
+    if (!collect_one_entry(root_path, true, result, options)) {
         return result;
     }
 
@@ -258,8 +357,13 @@ RawScanResult LocalFilesystemScanner::scan(const std::filesystem::path& root_pat
             continue;
         }
 
-        if (!collect_one_entry(iterator->path(), false, result, options.max_entries)) {
+        bool included = false;
+        bool disable_recursion = false;
+        if (!collect_one_entry(iterator->path(), false, result, options, &included, &disable_recursion)) {
             break;
+        }
+        if (!included && disable_recursion) {
+            iterator.disable_recursion_pending();
         }
     }
 

@@ -16,6 +16,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
 #include <boost/beast/websocket.hpp>
 
 #include "api/indexing_pipeline.hpp"
@@ -40,6 +41,7 @@ using host_indexer::domain::Snapshot;
 using host_indexer::domain::ValidationErrorCode;
 namespace asio = boost::asio;
 namespace beast = boost::beast;
+namespace http = beast::http;
 namespace websocket = beast::websocket;
 using tcp = asio::ip::tcp;
 namespace crud = backend::shared::crud;
@@ -138,6 +140,47 @@ private:
     bool connected_ {false};
 };
 
+struct HttpGetResult {
+    unsigned int status_code {0U};
+    std::string body {};
+    std::string content_type {};
+};
+
+HttpGetResult http_get(const std::uint16_t port, const std::string& target) {
+    asio::io_context io_context;
+    tcp::resolver resolver(io_context);
+    tcp::socket socket(io_context);
+    beast::flat_buffer read_buffer;
+    boost::system::error_code error;
+
+    const auto endpoints = resolver.resolve("127.0.0.1", std::to_string(port), error);
+    require(!error, "http_get: resolve failed");
+    asio::connect(socket, endpoints, error);
+    require(!error, "http_get: connect failed");
+
+    http::request<http::empty_body> request(http::verb::get, target, 11);
+    request.set(http::field::host, "127.0.0.1");
+    request.set(http::field::user_agent, "hostindexer-test");
+    http::write(socket, request, error);
+    require(!error, "http_get: write failed");
+
+    http::response<http::string_body> response;
+    http::read(socket, read_buffer, response, error);
+    require(!error, "http_get: read failed");
+
+    socket.shutdown(tcp::socket::shutdown_both, error);
+    error.clear();
+    socket.close(error);
+
+    HttpGetResult result;
+    result.status_code = static_cast<unsigned int>(response.result_int());
+    result.body = std::move(response.body());
+    if (const auto content_type = response.find(http::field::content_type); content_type != response.end()) {
+        result.content_type = std::string(content_type->value());
+    }
+    return result;
+}
+
 class WebsocketServerHarness final {
 public:
     WebsocketServerHarness() = default;
@@ -145,7 +188,11 @@ public:
         stop();
     }
 
-    void start(std::string websocket_path) {
+    void start(std::string websocket_path,
+               const host_indexer::transport::TransportSecurityMode security_mode =
+                   host_indexer::transport::TransportSecurityMode::Dev,
+               std::string bridge_auth_token = "test-token",
+               const bool allow_plain_websocket_in_prod = true) {
         if (started_) {
             return;
         }
@@ -180,8 +227,10 @@ public:
         server_options.websocket_path = std::move(websocket_path);
         server_options.default_root_path = root_dir_;
         server_options.default_outbox_batch_size = 32U;
+        server_options.security_mode = security_mode;
+        server_options.allow_plain_websocket_in_prod = allow_plain_websocket_in_prod;
         server_options.allowed_client_instance_id = "test-client";
-        server_options.bridge_auth_token = "test-token";
+        server_options.bridge_auth_token = std::move(bridge_auth_token);
 
         server_ = std::make_unique<host_indexer::transport::WebsocketCrudServer>(
             io_context_,
@@ -257,6 +306,27 @@ std::uint64_t max_record_sequence(const crud::CrudResultMessage& result) {
     return max_sequence;
 }
 
+crud::HelloAckMessage send_hello_and_parse_ack(WebsocketCrudTestClient& client,
+                                               const std::string& host_id,
+                                               const std::string& client_instance_id,
+                                               const std::string& auth_token) {
+    crud::HelloMessage hello;
+    hello.host_id = host_id;
+    hello.client_instance_id = client_instance_id;
+    hello.auth_token = auth_token;
+
+    const auto hello_ack_json = client.request(crud::to_json(hello));
+    const auto hello_ack = crud::parse_hello_ack(hello_ack_json);
+    require(hello_ack.has_value(), "hello_ack message must parse");
+    return *hello_ack;
+}
+
+std::string fixture_root_path(const std::string_view name) {
+    return (std::filesystem::temp_directory_path() / "host_indexer_fixture" / std::string(name))
+        .lexically_normal()
+        .generic_string();
+}
+
 FileMetadata make_metadata(const std::uint64_t size,
                            const std::uint32_t permissions,
                            const std::uint64_t file_id,
@@ -296,12 +366,13 @@ Snapshot make_empty_fs_fixture() {
     snapshot.created_at = 1'700'000'001;
     snapshot.host_identifier = "host-a";
     snapshot.root_entry_id = 1;
+    const auto root_path = fixture_root_path("data");
 
     snapshot.entries.push_back(
         make_entry(
             1,
             0,
-            "/data",
+            root_path,
             "data",
             EntryType::Directory,
             make_metadata(0, 0755, 10, 1, 1'700'000'001)
@@ -317,12 +388,13 @@ Snapshot make_deep_tree_fixture(const std::size_t depth) {
     snapshot.created_at = 1'700'000'010;
     snapshot.host_identifier = "host-b";
     snapshot.root_entry_id = 1;
+    const auto root_path = fixture_root_path("deep");
 
     snapshot.entries.push_back(
         make_entry(
             1,
             0,
-            "/deep",
+            root_path,
             "deep",
             EntryType::Directory,
             make_metadata(0, 0755, 20, 1, 1'700'000'010)
@@ -330,15 +402,16 @@ Snapshot make_deep_tree_fixture(const std::size_t depth) {
     );
 
     std::uint64_t parent_id = 1;
-    std::string path = "/deep";
+    std::filesystem::path path(root_path);
     for (std::size_t i = 0; i < depth; ++i) {
         const auto id = static_cast<std::uint64_t>(2 + i);
-        path += "/d" + std::to_string(i);
+        path /= "d" + std::to_string(i);
+        const auto normalized_path = path.lexically_normal().generic_string();
         snapshot.entries.push_back(
             make_entry(
                 id,
                 parent_id,
-                path,
+                normalized_path,
                 "d" + std::to_string(i),
                 EntryType::Directory,
                 make_metadata(0, 0755, 20 + id, 1, 1'700'000'010 + static_cast<std::int64_t>(i))
@@ -357,12 +430,13 @@ Snapshot make_rename_storm_base(const std::size_t count) {
     snapshot.created_at = 1'700'000'100;
     snapshot.host_identifier = "host-c";
     snapshot.root_entry_id = 1;
+    const auto root_path = fixture_root_path("storm");
 
     snapshot.entries.push_back(
         make_entry(
             1,
             0,
-            "/storm",
+            root_path,
             "storm",
             EntryType::Directory,
             make_metadata(0, 0755, 100, 1, 1'700'000'100)
@@ -375,7 +449,7 @@ Snapshot make_rename_storm_base(const std::size_t count) {
             make_entry(
                 id,
                 1,
-                "/storm/file_" + std::to_string(i) + ".txt",
+                (std::filesystem::path(root_path) / ("file_" + std::to_string(i) + ".txt")).generic_string(),
                 "file_" + std::to_string(i) + ".txt",
                 EntryType::File,
                 make_metadata(
@@ -396,9 +470,10 @@ Snapshot make_rename_storm_target(const Snapshot& base) {
     Snapshot target = base;
     target.snapshot_id = 2002;
     target.created_at = 1'700'000'200;
+    const std::filesystem::path root_path(target.entries.front().normalized_path);
 
     for (std::size_t i = 1; i < target.entries.size(); ++i) {
-        target.entries[i].normalized_path = "/storm/renamed_" + std::to_string(i) + ".txt";
+        target.entries[i].normalized_path = (root_path / ("renamed_" + std::to_string(i) + ".txt")).generic_string();
         target.entries[i].name = "renamed_" + std::to_string(i) + ".txt";
     }
 
@@ -408,11 +483,12 @@ Snapshot make_rename_storm_target(const Snapshot& base) {
 Snapshot make_permission_edge_fixture() {
     Snapshot snapshot = make_empty_fs_fixture();
     snapshot.snapshot_id = 3001;
+    const auto root_path = snapshot.entries.front().normalized_path;
     snapshot.entries.push_back(
         make_entry(
             2,
             1,
-            "/data/secret.bin",
+            (std::filesystem::path(root_path) / "secret.bin").generic_string(),
             "secret.bin",
             EntryType::File,
             make_metadata(17, 0xFFFF0001U, 99, 1, 1'700'000'300)
@@ -495,6 +571,87 @@ bool delta_equals(const DeltaSnapshot& lhs, const DeltaSnapshot& rhs) {
         }
     }
     return true;
+}
+
+bool has_scan_entry_path(const host_indexer::filesystem::RawScanResult& scan, const std::string& normalized_path) {
+    for (const auto& entry : scan.entries) {
+        if (entry.normalized_path == normalized_path) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void test_scanner_include_exclude_globs() {
+    const auto root_dir = std::filesystem::temp_directory_path() / make_temp_name("host_indexer_scan_globs");
+    std::error_code fs_error;
+    std::filesystem::create_directories(root_dir / "nested", fs_error);
+    require(!fs_error, "scan-globs test: failed to create nested directory");
+    std::filesystem::create_directories(root_dir / "excluded_dir", fs_error);
+    require(!fs_error, "scan-globs test: failed to create excluded directory");
+
+    {
+        std::ofstream keep_file(root_dir / "keep.txt", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(keep_file), "scan-globs test: failed to create keep.txt");
+        keep_file << "keep";
+    }
+    {
+        std::ofstream skip_file(root_dir / "skip.tmp", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(skip_file), "scan-globs test: failed to create skip.tmp");
+        skip_file << "skip";
+    }
+    {
+        std::ofstream nested_keep(root_dir / "nested" / "keep2.txt", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(nested_keep), "scan-globs test: failed to create nested keep2.txt");
+        nested_keep << "nested-keep";
+    }
+    {
+        std::ofstream nested_skip(root_dir / "nested" / "skip2.log", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(nested_skip), "scan-globs test: failed to create nested skip2.log");
+        nested_skip << "nested-skip";
+    }
+    {
+        std::ofstream excluded_file(root_dir / "excluded_dir" / "secret.txt", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(excluded_file), "scan-globs test: failed to create excluded secret.txt");
+        excluded_file << "secret";
+    }
+
+    host_indexer::filesystem::ScanOptions scan_options;
+    scan_options.include_globs = {"*.txt"};
+    scan_options.exclude_globs = {"*excluded_dir*"};
+    scan_options.max_entries = 1024U;
+    scan_options.follow_symlinks = false;
+
+    host_indexer::filesystem::LocalFilesystemScanner scanner;
+    const auto scan = scanner.scan(root_dir, scan_options);
+
+    const auto root_normalized = std::filesystem::absolute(root_dir).lexically_normal().generic_string();
+    const auto keep_path = (std::filesystem::absolute(root_dir) / "keep.txt").lexically_normal().generic_string();
+    const auto skip_tmp_path = (std::filesystem::absolute(root_dir) / "skip.tmp").lexically_normal().generic_string();
+    const auto nested_dir_path = (std::filesystem::absolute(root_dir) / "nested").lexically_normal().generic_string();
+    const auto nested_keep_path = (std::filesystem::absolute(root_dir) / "nested" / "keep2.txt")
+        .lexically_normal()
+        .generic_string();
+    const auto nested_skip_path = (std::filesystem::absolute(root_dir) / "nested" / "skip2.log")
+        .lexically_normal()
+        .generic_string();
+    const auto excluded_dir_path = (std::filesystem::absolute(root_dir) / "excluded_dir")
+        .lexically_normal()
+        .generic_string();
+    const auto excluded_file_path = (std::filesystem::absolute(root_dir) / "excluded_dir" / "secret.txt")
+        .lexically_normal()
+        .generic_string();
+
+    require(has_scan_entry_path(scan, root_normalized), "scan-globs test: root entry should be present");
+    require(has_scan_entry_path(scan, keep_path), "scan-globs test: keep.txt should be present");
+    require(has_scan_entry_path(scan, nested_dir_path), "scan-globs test: nested directory should be present");
+    require(has_scan_entry_path(scan, nested_keep_path), "scan-globs test: nested keep2.txt should be present");
+    require(!has_scan_entry_path(scan, skip_tmp_path), "scan-globs test: skip.tmp should be filtered by include");
+    require(!has_scan_entry_path(scan, nested_skip_path), "scan-globs test: nested skip2.log should be filtered by include");
+    require(!has_scan_entry_path(scan, excluded_dir_path), "scan-globs test: excluded_dir should be excluded");
+    require(!has_scan_entry_path(scan, excluded_file_path), "scan-globs test: excluded secret.txt should be excluded");
+
+    std::filesystem::remove_all(root_dir, fs_error);
 }
 
 void test_empty_fixture_validation() {
@@ -659,6 +816,376 @@ void test_lmdb_store_round_trip() {
     std::filesystem::remove_all(temp_dir);
 }
 
+void test_snapshot_retention_prunes_old_snapshots_and_deltas() {
+    const auto temp_dir = std::filesystem::temp_directory_path() / make_temp_name("host_indexer_retention_test");
+    std::filesystem::create_directories(temp_dir);
+
+    auto base_snapshot = make_rename_storm_base(4);
+    base_snapshot.snapshot_id = 5101;
+    base_snapshot.created_at = 1'700'000'100;
+
+    auto middle_snapshot = make_rename_storm_target(base_snapshot);
+    middle_snapshot.snapshot_id = 5102;
+    middle_snapshot.created_at = 1'700'000'200;
+
+    auto latest_snapshot = middle_snapshot;
+    latest_snapshot.snapshot_id = 5103;
+    latest_snapshot.created_at = 1'700'000'300;
+    if (latest_snapshot.entries.size() > 1) {
+        latest_snapshot.entries[1].metadata.size_bytes += 7U;
+    }
+
+    host_indexer::snapshot::DeltaEngine delta_engine;
+    const auto delta_base_to_middle = delta_engine.compute(base_snapshot, middle_snapshot, {});
+    const auto delta_middle_to_latest = delta_engine.compute(middle_snapshot, latest_snapshot, {});
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = temp_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+
+    auto status = store.open(options);
+    require(status.ok(), "retention test: lmdb open should succeed");
+
+    status = store.put_snapshot(base_snapshot, true);
+    require(status.ok(), "retention test: put base snapshot should succeed");
+    status = store.put_snapshot(middle_snapshot, true);
+    require(status.ok(), "retention test: put middle snapshot should succeed");
+    status = store.put_snapshot(latest_snapshot, true);
+    require(status.ok(), "retention test: put latest snapshot should succeed");
+
+    status = store.put_delta(delta_base_to_middle, &base_snapshot, &middle_snapshot, true);
+    require(status.ok(), "retention test: put base->middle delta should succeed");
+    status = store.put_delta(delta_middle_to_latest, &middle_snapshot, &latest_snapshot, true);
+    require(status.ok(), "retention test: put middle->latest delta should succeed");
+
+    host_indexer::storage::RetentionCleanupStats retention_stats;
+    status = store.apply_snapshot_retention(2U, &retention_stats);
+    require(status.ok(), "retention test: retention cleanup should succeed");
+    require(retention_stats.snapshots_removed == 1U, "retention test: exactly one snapshot should be pruned");
+    require(retention_stats.deltas_removed == 1U, "retention test: exactly one delta should be pruned");
+
+    host_indexer::domain::Snapshot loaded_snapshot;
+    status = store.get_snapshot(base_snapshot.snapshot_id, loaded_snapshot, true);
+    require(!status.ok(), "retention test: base snapshot should be pruned");
+    require(status.code == host_indexer::storage::StoreErrorCode::NotFound, "retention test: base snapshot should be missing");
+
+    status = store.get_snapshot(middle_snapshot.snapshot_id, loaded_snapshot, true);
+    require(status.ok(), "retention test: middle snapshot should remain");
+    status = store.get_snapshot(latest_snapshot.snapshot_id, loaded_snapshot, true);
+    require(status.ok(), "retention test: latest snapshot should remain");
+
+    host_indexer::domain::DeltaSnapshot loaded_delta;
+    status = store.get_delta(
+        delta_base_to_middle.base_snapshot_id,
+        delta_base_to_middle.target_snapshot_id,
+        loaded_delta,
+        true
+    );
+    require(!status.ok(), "retention test: base->middle delta should be pruned");
+    require(status.code == host_indexer::storage::StoreErrorCode::NotFound, "retention test: pruned delta should be missing");
+
+    status = store.get_delta(
+        delta_middle_to_latest.base_snapshot_id,
+        delta_middle_to_latest.target_snapshot_id,
+        loaded_delta,
+        true
+    );
+    require(status.ok(), "retention test: middle->latest delta should remain");
+
+    store.close();
+    std::filesystem::remove_all(temp_dir);
+}
+
+void test_store_stats_counts_records() {
+    const auto temp_dir = std::filesystem::temp_directory_path() / make_temp_name("host_indexer_store_stats");
+    std::filesystem::create_directories(temp_dir);
+
+    auto snapshot_a = make_rename_storm_base(3);
+    snapshot_a.snapshot_id = 5201;
+    snapshot_a.created_at = 1'700'010'100;
+    auto snapshot_b = make_rename_storm_target(snapshot_a);
+    snapshot_b.snapshot_id = 5202;
+    snapshot_b.created_at = 1'700'010'200;
+
+    host_indexer::snapshot::DeltaEngine delta_engine;
+    const auto delta = delta_engine.compute(snapshot_a, snapshot_b, {});
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = temp_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+
+    auto status = store.open(options);
+    require(status.ok(), "store-stats test: lmdb open should succeed");
+
+    host_indexer::storage::StoreStats stats;
+    status = store.get_stats(stats);
+    require(status.ok(), "store-stats test: get_stats should succeed for empty store");
+    require(stats.snapshots_count == 0U, "store-stats test: empty snapshots count should be zero");
+    require(stats.deltas_count == 0U, "store-stats test: empty deltas count should be zero");
+    require(stats.transport_outbox_count == 0U, "store-stats test: empty outbox count should be zero");
+    require(stats.transport_consumers_count == 0U, "store-stats test: empty consumer count should be zero");
+    require(stats.next_transport_sequence >= 1U, "store-stats test: next sequence should be initialized");
+
+    status = store.put_snapshot(snapshot_a, true);
+    require(status.ok(), "store-stats test: put snapshot A should succeed");
+    status = store.put_snapshot(snapshot_b, true);
+    require(status.ok(), "store-stats test: put snapshot B should succeed");
+    status = store.put_delta(delta, &snapshot_a, &snapshot_b, true);
+    require(status.ok(), "store-stats test: put delta should succeed");
+    status = store.enqueue_snapshot(snapshot_b, true, nullptr);
+    require(status.ok(), "store-stats test: enqueue snapshot should succeed");
+    status = store.register_transport_consumer("stats-consumer");
+    require(status.ok(), "store-stats test: register consumer should succeed");
+
+    status = store.get_stats(stats);
+    require(status.ok(), "store-stats test: get_stats should succeed after writes");
+    require(stats.snapshots_count == 2U, "store-stats test: snapshots count should be two");
+    require(stats.deltas_count == 1U, "store-stats test: deltas count should be one");
+    require(stats.transport_outbox_count == 1U, "store-stats test: outbox count should be one");
+    require(stats.transport_consumers_count == 1U, "store-stats test: consumer count should be one");
+    require(stats.next_transport_sequence >= 2U, "store-stats test: next sequence should advance");
+
+    store.close();
+    std::filesystem::remove_all(temp_dir);
+}
+
+void test_update_with_missing_base_has_no_side_effects() {
+    const auto test_name = make_temp_name("host_indexer_missing_base");
+    const auto root_dir = std::filesystem::temp_directory_path() / (test_name + "_root");
+    const auto db_dir = std::filesystem::temp_directory_path() / (test_name + "_db");
+
+    std::error_code fs_error;
+    std::filesystem::create_directories(root_dir, fs_error);
+    require(!fs_error, "failed to create missing-base root dir");
+    std::filesystem::create_directories(db_dir, fs_error);
+    require(!fs_error, "failed to create missing-base db dir");
+
+    {
+        std::ofstream file(root_dir / "seed.txt", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(file), "failed to create missing-base seed file");
+        file << "seed";
+    }
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = db_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+
+    auto status = store.open(options);
+    require(status.ok(), "missing-base test: lmdb open should succeed");
+
+    host_indexer::api::IndexingPipeline pipeline(store);
+    const auto result = pipeline.capture_snapshot_and_delta(root_dir, 999999999ULL, {}, true);
+    require(!result.ok(), "missing-base update must fail");
+    require(
+        result.delta_store_status.code == host_indexer::storage::StoreErrorCode::NotFound,
+        "missing-base update must report base snapshot not found"
+    );
+
+    require(
+        result.snapshot_build.snapshot.snapshot_id != 0U,
+        "missing-base update should still build deterministic target snapshot id"
+    );
+
+    host_indexer::domain::Snapshot persisted_snapshot;
+    status = store.get_snapshot(result.snapshot_build.snapshot.snapshot_id, persisted_snapshot, true);
+    require(!status.ok(), "missing-base update must not persist target snapshot");
+    require(
+        status.code == host_indexer::storage::StoreErrorCode::NotFound,
+        "missing-base update should leave no persisted target snapshot"
+    );
+
+    std::vector<host_indexer::storage::TransportRecord> records;
+    status = store.fetch_transport_batch(16, records);
+    require(status.ok(), "missing-base update should still allow outbox fetch");
+    require(records.empty(), "missing-base update must not enqueue transport records");
+
+    store.close();
+    std::filesystem::remove_all(db_dir, fs_error);
+    fs_error.clear();
+    std::filesystem::remove_all(root_dir, fs_error);
+}
+
+void test_incremental_capture_recovers_after_pruned_base() {
+    const auto test_name = make_temp_name("host_indexer_watch_recovery");
+    const auto root_dir = std::filesystem::temp_directory_path() / (test_name + "_root");
+    const auto db_dir = std::filesystem::temp_directory_path() / (test_name + "_db");
+
+    std::error_code fs_error;
+    std::filesystem::create_directories(root_dir, fs_error);
+    require(!fs_error, "watch-recovery test: failed to create root dir");
+    std::filesystem::create_directories(db_dir, fs_error);
+    require(!fs_error, "watch-recovery test: failed to create db dir");
+
+    {
+        std::ofstream file(root_dir / "seed.txt", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(file), "watch-recovery test: failed to create seed file");
+        file << "seed";
+    }
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = db_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+
+    auto status = store.open(options);
+    require(status.ok(), "watch-recovery test: lmdb open should succeed");
+
+    host_indexer::api::IndexingPipeline pipeline(store);
+
+    const auto initial_create = pipeline.capture_snapshot(root_dir, {}, true);
+    require(initial_create.ok(), "watch-recovery test: initial create should succeed");
+    const auto base_snapshot_id = initial_create.snapshot_build.snapshot.snapshot_id;
+    require(base_snapshot_id != 0U, "watch-recovery test: base snapshot id should be non-zero");
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    {
+        std::ofstream mutate(root_dir / "seed.txt", std::ios::binary | std::ios::app);
+        require(static_cast<bool>(mutate), "watch-recovery test: failed to mutate file before incremental update");
+        mutate << "-v2";
+    }
+
+    const auto first_incremental = pipeline.capture_snapshot_and_delta(root_dir, base_snapshot_id, {}, true);
+    require(first_incremental.ok(), "watch-recovery test: first incremental update should succeed");
+    require(
+        first_incremental.snapshot_build.snapshot.snapshot_id != 0U,
+        "watch-recovery test: target snapshot id should be non-zero"
+    );
+
+    host_indexer::storage::RetentionCleanupStats retention_stats;
+    status = store.apply_snapshot_retention(1U, &retention_stats);
+    require(status.ok(), "watch-recovery test: retention should succeed");
+    require(retention_stats.snapshots_removed >= 1U, "watch-recovery test: retention should prune at least one snapshot");
+
+    host_indexer::domain::Snapshot pruned_base;
+    status = store.get_snapshot(base_snapshot_id, pruned_base, true);
+    require(!status.ok(), "watch-recovery test: base snapshot should be pruned");
+    require(
+        status.code == host_indexer::storage::StoreErrorCode::NotFound,
+        "watch-recovery test: pruned base snapshot should return not found"
+    );
+
+    host_indexer::storage::StoreStats before_failed_update_stats;
+    status = store.get_stats(before_failed_update_stats);
+    require(status.ok(), "watch-recovery test: get_stats before failed update should succeed");
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    {
+        std::ofstream mutate(root_dir / "seed.txt", std::ios::binary | std::ios::app);
+        require(static_cast<bool>(mutate), "watch-recovery test: failed to mutate file before failed update");
+        mutate << "-v3";
+    }
+
+    const auto failed_incremental = pipeline.capture_snapshot_and_delta(root_dir, base_snapshot_id, {}, true);
+    require(!failed_incremental.ok(), "watch-recovery test: incremental update with pruned base should fail");
+    require(
+        failed_incremental.delta_store_status.code == host_indexer::storage::StoreErrorCode::NotFound,
+        "watch-recovery test: failed incremental update should report base not found"
+    );
+
+    host_indexer::storage::StoreStats after_failed_update_stats;
+    status = store.get_stats(after_failed_update_stats);
+    require(status.ok(), "watch-recovery test: get_stats after failed update should succeed");
+    require(
+        after_failed_update_stats.snapshots_count == before_failed_update_stats.snapshots_count,
+        "watch-recovery test: failed incremental update should not change snapshots count"
+    );
+    require(
+        after_failed_update_stats.deltas_count == before_failed_update_stats.deltas_count,
+        "watch-recovery test: failed incremental update should not change deltas count"
+    );
+
+    const auto recovered_full = pipeline.capture_snapshot(root_dir, {}, true);
+    require(recovered_full.ok(), "watch-recovery test: full snapshot recovery should succeed");
+    require(
+        recovered_full.snapshot_build.snapshot.snapshot_id != 0U,
+        "watch-recovery test: recovered full snapshot id should be non-zero"
+    );
+
+    store.close();
+    std::filesystem::remove_all(db_dir, fs_error);
+    fs_error.clear();
+    std::filesystem::remove_all(root_dir, fs_error);
+}
+
+void test_transport_ack_is_consumer_scoped() {
+    const auto snapshot = make_rename_storm_base(5);
+    const auto target = make_rename_storm_target(snapshot);
+    host_indexer::snapshot::DeltaEngine engine;
+    const auto delta = engine.compute(snapshot, target, {});
+
+    const auto temp_dir = std::filesystem::temp_directory_path() / make_temp_name("host_indexer_outbox_consumers");
+    std::filesystem::create_directories(temp_dir);
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = temp_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+
+    auto status = store.open(options);
+    require(status.ok(), "consumer-ack test: lmdb open should succeed");
+
+    std::uint64_t seq_snapshot = 0U;
+    std::uint64_t seq_delta = 0U;
+    status = store.enqueue_snapshot(snapshot, true, &seq_snapshot);
+    require(status.ok(), "consumer-ack test: enqueue snapshot should succeed");
+    status = store.enqueue_delta(delta, &snapshot, &target, true, &seq_delta);
+    require(status.ok(), "consumer-ack test: enqueue delta should succeed");
+    require(seq_delta > seq_snapshot, "consumer-ack test: sequence should increase");
+
+    status = store.register_transport_consumer("consumer-a");
+    require(status.ok(), "consumer-ack test: register consumer-a should succeed");
+    status = store.register_transport_consumer("consumer-b");
+    require(status.ok(), "consumer-ack test: register consumer-b should succeed");
+
+    std::vector<host_indexer::storage::TransportRecord> consumer_a_records;
+    std::vector<host_indexer::storage::TransportRecord> consumer_b_records;
+    status = store.fetch_transport_batch_for_consumer("consumer-a", 16U, consumer_a_records);
+    require(status.ok(), "consumer-ack test: fetch for consumer-a should succeed");
+    require(consumer_a_records.size() == 2U, "consumer-ack test: consumer-a should see two records");
+
+    status = store.fetch_transport_batch_for_consumer("consumer-b", 16U, consumer_b_records);
+    require(status.ok(), "consumer-ack test: fetch for consumer-b should succeed");
+    require(consumer_b_records.size() == 2U, "consumer-ack test: consumer-b should see two records");
+
+    status = store.ack_transport_until_for_consumer("consumer-a", seq_delta);
+    require(status.ok(), "consumer-ack test: ack for consumer-a should succeed");
+    consumer_a_records.clear();
+    status = store.fetch_transport_batch_for_consumer("consumer-a", 16U, consumer_a_records);
+    require(status.ok(), "consumer-ack test: fetch after ack for consumer-a should succeed");
+    require(consumer_a_records.empty(), "consumer-ack test: consumer-a should have no unread records after ack");
+
+    consumer_b_records.clear();
+    status = store.fetch_transport_batch_for_consumer("consumer-b", 16U, consumer_b_records);
+    require(status.ok(), "consumer-ack test: fetch for consumer-b after consumer-a ack should succeed");
+    require(
+        consumer_b_records.size() == 2U,
+        "consumer-ack test: consumer-b should still see records after consumer-a ack"
+    );
+
+    status = store.compact_transport_up_to_min_acked();
+    require(status.ok(), "consumer-ack test: compaction with consumer-b unacked should succeed");
+    consumer_b_records.clear();
+    status = store.fetch_transport_batch_for_consumer("consumer-b", 16U, consumer_b_records);
+    require(status.ok(), "consumer-ack test: fetch for consumer-b after guarded compaction should succeed");
+    require(consumer_b_records.size() == 2U, "consumer-ack test: guarded compaction must keep consumer-b records");
+
+    status = store.ack_transport_until_for_consumer("consumer-b", seq_delta);
+    require(status.ok(), "consumer-ack test: ack for consumer-b should succeed");
+    status = store.compact_transport_up_to_min_acked();
+    require(status.ok(), "consumer-ack test: compaction after both acks should succeed");
+
+    std::vector<host_indexer::storage::TransportRecord> consumer_c_records;
+    status = store.fetch_transport_batch_for_consumer("consumer-c", 16U, consumer_c_records);
+    require(status.ok(), "consumer-ack test: fetch for consumer-c should succeed");
+    require(consumer_c_records.empty(), "consumer-ack test: compaction should clear fully-acked outbox records");
+
+    store.close();
+    std::filesystem::remove_all(temp_dir);
+}
+
 void test_websocket_path_enforced() {
     WebsocketServerHarness harness;
     harness.start("/hostindexer-expected");
@@ -667,6 +1194,265 @@ void test_websocket_path_enforced() {
     boost::system::error_code error;
     const bool connected = client.connect("/hostindexer-wrong", error);
     require(!connected, "websocket handshake should fail on unexpected path");
+}
+
+void test_http_operational_endpoints() {
+    WebsocketServerHarness harness;
+    harness.start("/hostindexer-ops");
+
+    const auto health = http_get(harness.port(), "/healthz");
+    require(health.status_code == 200U, "operational endpoints test: /healthz must return 200");
+    const auto health_json = crud::text_to_json(health.body);
+    require(health_json.has_value(), "operational endpoints test: /healthz response must be valid json");
+    require(health_json->value("status", "") == "ok", "operational endpoints test: /healthz status must be ok");
+    require(health_json->value("mode", "") == "live", "operational endpoints test: /healthz mode must be live");
+
+    const auto readiness = http_get(harness.port(), "/readyz");
+    require(readiness.status_code == 200U, "operational endpoints test: /readyz must return 200");
+    const auto readiness_json = crud::text_to_json(readiness.body);
+    require(readiness_json.has_value(), "operational endpoints test: /readyz response must be valid json");
+    require(readiness_json->value("ready", false), "operational endpoints test: /readyz ready must be true");
+
+    const auto non_upgrade = http_get(harness.port(), "/hostindexer-ops");
+    require(non_upgrade.status_code == 400U, "operational endpoints test: non-upgrade websocket path must return 400");
+
+    WebsocketCrudTestClient client(harness.port());
+    boost::system::error_code error;
+    const bool connected = client.connect("/hostindexer-ops", error);
+    require(connected, "operational endpoints test: websocket connect should succeed");
+
+    const auto hello_ack = send_hello_and_parse_ack(client, "ops-host", "test-client", "test-token");
+    require(hello_ack.accepted, "operational endpoints test: hello should be accepted");
+
+    crud::CrudCommandMessage create;
+    create.request_id = "ops-create";
+    create.operation = crud::Operation::Create;
+    create.root_path = harness.root_dir().string();
+    create.outbox_batch_size = 64U;
+    const auto create_json = client.request(crud::to_json(create));
+    const auto create_result = crud::parse_crud_result(create_json);
+    require(create_result.has_value(), "operational endpoints test: create result should parse");
+    require(create_result->ok, "operational endpoints test: create should succeed");
+
+    const auto metrics = http_get(harness.port(), "/metrics");
+    require(metrics.status_code == 200U, "operational endpoints test: /metrics must return 200");
+    require(
+        metrics.body.find("hostindexer_metrics_up 1") != std::string::npos,
+        "operational endpoints test: /metrics must include hostindexer_metrics_up"
+    );
+    require(
+        metrics.body.find("hostindexer_snapshots_count ") != std::string::npos,
+        "operational endpoints test: /metrics must include hostindexer_snapshots_count"
+    );
+    require(
+        metrics.body.find("hostindexer_transport_outbox_count ") != std::string::npos,
+        "operational endpoints test: /metrics must include hostindexer_transport_outbox_count"
+    );
+
+    client.close();
+}
+
+void test_websocket_prod_requires_token() {
+    WebsocketServerHarness harness;
+    harness.start(
+        "/hostindexer-prod",
+        host_indexer::transport::TransportSecurityMode::Prod,
+        "prod-token"
+    );
+
+    WebsocketCrudTestClient client(harness.port());
+    boost::system::error_code error;
+    const bool connected = client.connect("/hostindexer-prod", error);
+    require(connected, "websocket handshake should succeed in prod mode");
+
+    auto hello_ack = send_hello_and_parse_ack(client, "test-host", "test-client", "");
+    const auto missing_token_ack = hello_ack;
+    require(!missing_token_ack.accepted, "prod mode must reject missing auth token");
+    require(
+        missing_token_ack.reason.find("required in production mode") != std::string::npos,
+        "prod missing-token rejection reason should mention required token"
+    );
+
+    hello_ack = send_hello_and_parse_ack(client, "test-host", "test-client", "wrong-token");
+    const auto wrong_token_ack = hello_ack;
+    require(!wrong_token_ack.accepted, "prod mode must reject wrong auth token");
+
+    hello_ack = send_hello_and_parse_ack(client, "test-host", "test-client", "prod-token");
+    const auto valid_token_ack = hello_ack;
+    require(valid_token_ack.accepted, "prod mode should accept valid auth token");
+
+    client.close();
+}
+
+void test_websocket_server_rejects_prod_without_token() {
+    const auto test_name = make_temp_name("host_indexer_prod_no_token");
+    const auto db_dir = std::filesystem::temp_directory_path() / (test_name + "_db");
+    std::error_code fs_error;
+    std::filesystem::create_directories(db_dir, fs_error);
+    require(!fs_error, "prod-no-token test: failed to create db directory");
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = db_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+    auto status = store.open(options);
+    require(status.ok(), "prod-no-token test: lmdb open should succeed");
+
+    host_indexer::api::IndexingPipeline pipeline(store);
+    boost::asio::io_context io_context;
+
+    host_indexer::transport::WebsocketCrudServerOptions server_options;
+    server_options.listen_address = "127.0.0.1";
+    server_options.port = reserve_free_port();
+    server_options.websocket_path = "/hostindexer-prod-no-token";
+    server_options.security_mode = host_indexer::transport::TransportSecurityMode::Prod;
+    server_options.allow_plain_websocket_in_prod = true;
+    server_options.allowed_client_instance_id = "test-client";
+    server_options.bridge_auth_token.clear();
+
+    host_indexer::transport::WebsocketCrudServer server(io_context, store, pipeline, server_options);
+    status = server.start();
+    require(!status.ok(), "prod-no-token test: server start must fail");
+    require(
+        status.code == host_indexer::storage::StoreErrorCode::InvalidArgument,
+        "prod-no-token test: server start should fail with invalid argument"
+    );
+
+    store.close();
+    std::filesystem::remove_all(db_dir, fs_error);
+}
+
+void test_websocket_server_rejects_prod_without_transport_override() {
+    const auto test_name = make_temp_name("host_indexer_prod_no_transport_override");
+    const auto db_dir = std::filesystem::temp_directory_path() / (test_name + "_db");
+    std::error_code fs_error;
+    std::filesystem::create_directories(db_dir, fs_error);
+    require(!fs_error, "prod-no-transport-override test: failed to create db directory");
+
+    host_indexer::storage::LmdbStore store;
+    host_indexer::storage::LmdbStoreOptions options;
+    options.directory = db_dir;
+    options.map_size_bytes = 256ULL * 1024ULL * 1024ULL;
+    auto status = store.open(options);
+    require(status.ok(), "prod-no-transport-override test: lmdb open should succeed");
+
+    host_indexer::api::IndexingPipeline pipeline(store);
+    boost::asio::io_context io_context;
+
+    host_indexer::transport::WebsocketCrudServerOptions server_options;
+    server_options.listen_address = "127.0.0.1";
+    server_options.port = reserve_free_port();
+    server_options.websocket_path = "/hostindexer-prod-no-transport-override";
+    server_options.security_mode = host_indexer::transport::TransportSecurityMode::Prod;
+    server_options.allow_plain_websocket_in_prod = false;
+    server_options.allowed_client_instance_id = "test-client";
+    server_options.bridge_auth_token = "prod-token";
+
+    host_indexer::transport::WebsocketCrudServer server(io_context, store, pipeline, server_options);
+    status = server.start();
+    require(!status.ok(), "prod-no-transport-override test: server start must fail");
+    require(
+        status.code == host_indexer::storage::StoreErrorCode::InvalidArgument,
+        "prod-no-transport-override test: server start should fail with invalid argument"
+    );
+
+    store.close();
+    std::filesystem::remove_all(db_dir, fs_error);
+}
+
+void test_websocket_dev_allows_missing_token_when_unconfigured() {
+    WebsocketServerHarness harness;
+    harness.start(
+        "/hostindexer-dev-open",
+        host_indexer::transport::TransportSecurityMode::Dev,
+        ""
+    );
+
+    WebsocketCrudTestClient client(harness.port());
+    boost::system::error_code error;
+    const bool connected = client.connect("/hostindexer-dev-open", error);
+    require(connected, "dev-open test: websocket handshake should succeed");
+
+    const auto hello_ack = send_hello_and_parse_ack(client, "test-host", "test-client", "");
+    require(hello_ack.accepted, "dev-open test: hello without token should be accepted when no server token is set");
+
+    client.close();
+}
+
+void test_websocket_multi_consumer_ack_isolation() {
+    WebsocketServerHarness harness;
+    harness.start("/hostindexer-multi");
+
+    WebsocketCrudTestClient client_a(harness.port());
+    WebsocketCrudTestClient client_b(harness.port());
+    boost::system::error_code error;
+    require(client_a.connect("/hostindexer-multi", error), "multi-consumer test: client A connect should succeed");
+    require(client_b.connect("/hostindexer-multi", error), "multi-consumer test: client B connect should succeed");
+
+    const auto hello_ack_a = send_hello_and_parse_ack(client_a, "host-a", "test-client", "test-token");
+    require(hello_ack_a.accepted, "multi-consumer test: client A hello should be accepted");
+    const auto hello_ack_b = send_hello_and_parse_ack(client_b, "host-b", "test-client", "test-token");
+    require(hello_ack_b.accepted, "multi-consumer test: client B hello should be accepted");
+
+    crud::CrudCommandMessage create;
+    create.request_id = "multi-create";
+    create.operation = crud::Operation::Create;
+    create.root_path = harness.root_dir().string();
+    create.outbox_batch_size = 64U;
+    const auto create_json = client_a.request(crud::to_json(create));
+    const auto create_result = crud::parse_crud_result(create_json);
+    require(create_result.has_value(), "multi-consumer test: create result should parse");
+    require(create_result->ok, "multi-consumer test: create command should succeed");
+    require(!create_result->records.empty(), "multi-consumer test: create should return transport records");
+
+    const std::uint64_t ack_sequence = max_record_sequence(*create_result);
+    require(ack_sequence != 0U, "multi-consumer test: ack sequence should be non-zero");
+
+    crud::IngestAckMessage ack_a;
+    ack_a.request_id = "multi-ack-a";
+    ack_a.ok = true;
+    ack_a.ack_sequence = ack_sequence;
+    ack_a.message = "ok";
+    client_a.send_json(crud::to_json(ack_a));
+
+    crud::CrudCommandMessage read_a;
+    read_a.request_id = "multi-read-a";
+    read_a.operation = crud::Operation::Read;
+    read_a.outbox_batch_size = 64U;
+    const auto read_a_json = client_a.request(crud::to_json(read_a));
+    const auto read_a_result = crud::parse_crud_result(read_a_json);
+    require(read_a_result.has_value(), "multi-consumer test: read-a result should parse");
+    require(read_a_result->ok, "multi-consumer test: read-a should succeed");
+    require(read_a_result->records.empty(), "multi-consumer test: client A should have no unread records after ack");
+
+    crud::CrudCommandMessage read_b;
+    read_b.request_id = "multi-read-b";
+    read_b.operation = crud::Operation::Read;
+    read_b.outbox_batch_size = 64U;
+    const auto read_b_json = client_b.request(crud::to_json(read_b));
+    const auto read_b_result = crud::parse_crud_result(read_b_json);
+    require(read_b_result.has_value(), "multi-consumer test: read-b result should parse");
+    require(read_b_result->ok, "multi-consumer test: read-b should succeed");
+    require(!read_b_result->records.empty(), "multi-consumer test: client B should still see unread records");
+
+    crud::IngestAckMessage ack_b;
+    ack_b.request_id = "multi-ack-b";
+    ack_b.ok = true;
+    ack_b.ack_sequence = ack_sequence;
+    ack_b.message = "ok";
+    client_b.send_json(crud::to_json(ack_b));
+
+    const auto read_b_after_ack_json = client_b.request(crud::to_json(read_b));
+    const auto read_b_after_ack_result = crud::parse_crud_result(read_b_after_ack_json);
+    require(read_b_after_ack_result.has_value(), "multi-consumer test: read-b-after-ack result should parse");
+    require(read_b_after_ack_result->ok, "multi-consumer test: read-b-after-ack should succeed");
+    require(
+        read_b_after_ack_result->records.empty(),
+        "multi-consumer test: client B should have no unread records after its own ack"
+    );
+
+    client_a.close();
+    client_b.close();
 }
 
 void test_websocket_crud_flow() {
@@ -756,8 +1542,11 @@ void test_websocket_crud_flow() {
     const auto delete_json = client.request(crud::to_json(del));
     const auto delete_result = crud::parse_crud_result(delete_json);
     require(delete_result.has_value(), "delete result should parse");
-    require(delete_result->ok, "delete command should succeed");
-    require(delete_result->message == "acknowledged", "delete command should acknowledge request");
+    require(!delete_result->ok, "delete command should be explicitly not implemented");
+    require(
+        delete_result->message == "delete_not_implemented",
+        "delete command should return not-implemented message"
+    );
 
     client.close();
 }
@@ -768,13 +1557,25 @@ int main() {
     test_empty_fixture_validation();
     test_invalid_header_detected();
     test_deep_tree_fixture();
+    test_scanner_include_exclude_globs();
     test_permission_edge_fixture();
     test_delta_rename_storm();
     test_snapshot_round_trip_binary_json();
     test_delta_round_trip_binary_json();
     test_migration_contract();
     test_lmdb_store_round_trip();
+    test_snapshot_retention_prunes_old_snapshots_and_deltas();
+    test_store_stats_counts_records();
+    test_update_with_missing_base_has_no_side_effects();
+    test_incremental_capture_recovers_after_pruned_base();
+    test_transport_ack_is_consumer_scoped();
     test_websocket_path_enforced();
+    test_http_operational_endpoints();
+    test_websocket_prod_requires_token();
+    test_websocket_server_rejects_prod_without_token();
+    test_websocket_server_rejects_prod_without_transport_override();
+    test_websocket_dev_allows_missing_token_when_unconfigured();
+    test_websocket_multi_consumer_ack_isolation();
     test_websocket_crud_flow();
 
     std::cout << "All HostIndexer tests passed.\n";

@@ -48,6 +48,34 @@ const char* command_name(const crud::Operation operation) {
     return "read";
 }
 
+const char* security_mode_name(const TransportSecurityMode mode) {
+    switch (mode) {
+        case TransportSecurityMode::Dev:
+            return "dev";
+        case TransportSecurityMode::Prod:
+            return "prod";
+    }
+    return "dev";
+}
+
+std::optional<std::string> validate_bridge_auth_token(const crud::HelloMessage& hello,
+                                                      const WebsocketCrudServerOptions& options) {
+    if (options.security_mode == TransportSecurityMode::Prod) {
+        if (options.bridge_auth_token.empty()) {
+            return std::string("server bridge auth token is not configured.");
+        }
+        if (hello.auth_token.empty()) {
+            return std::string("bridge auth token is required in production mode.");
+        }
+    }
+
+    if (!options.bridge_auth_token.empty() && hello.auth_token != options.bridge_auth_token) {
+        return std::string("bridge auth token mismatch.");
+    }
+
+    return std::nullopt;
+}
+
 std::atomic<std::uint64_t> g_session_counter {0U};
 
 storage::StoreStatus io_failure(const std::string_view context, const boost::system::error_code& error) {
@@ -81,10 +109,15 @@ beast::string_view request_path_from_target(const beast::string_view target) {
 }
 
 storage::StoreStatus append_transport_records(storage::LmdbStore& store,
+                                              std::string_view consumer_id,
                                               const std::size_t max_items,
                                               std::vector<crud::TransportRecordMessage>& out_records) {
     std::vector<storage::TransportRecord> records;
-    const auto fetch_status = store.fetch_transport_batch(std::max<std::size_t>(1U, max_items), records);
+    const auto fetch_status = store.fetch_transport_batch_for_consumer(
+        consumer_id,
+        std::max<std::size_t>(1U, max_items),
+        records
+    );
     if (!fetch_status.ok()) {
         return fetch_status;
     }
@@ -169,12 +202,15 @@ public:
     }
 
 private:
-    void reject_upgrade(const http::status status, std::string message) {
+    void send_http_response(const http::status status,
+                            std::string content_type,
+                            std::string body,
+                            const bool keep_alive = false) {
         auto response = std::make_shared<http::response<http::string_body>>(status, handshake_request_.version());
         response->set(http::field::server, std::string("host-indexer"));
-        response->set(http::field::content_type, "text/plain; charset=utf-8");
-        response->keep_alive(false);
-        response->body() = std::move(message);
+        response->set(http::field::content_type, std::move(content_type));
+        response->keep_alive(keep_alive);
+        response->body() = std::move(body);
         response->prepare_payload();
 
         http::async_write(
@@ -195,6 +231,117 @@ private:
         );
     }
 
+    void reject_upgrade(const http::status status, std::string message) {
+        send_http_response(status, "text/plain; charset=utf-8", std::move(message), false);
+    }
+
+    bool handle_operational_http_request() {
+        if (handshake_request_.method() != http::verb::get) {
+            return false;
+        }
+
+        const auto requested_path = request_path_from_target(handshake_request_.target());
+        const auto path_matches = [&](const std::string& configured_path) {
+            if (configured_path.empty()) {
+                return false;
+            }
+            const beast::string_view configured_view(configured_path.data(), configured_path.size());
+            return requested_path == configured_view;
+        };
+
+        if (path_matches(options_.health_path)) {
+            nlohmann::json payload {
+                {"service", "hostindexer"},
+                {"status", "ok"},
+                {"mode", "live"}
+            };
+            send_http_response(
+                http::status::ok,
+                "application/json; charset=utf-8",
+                crud::json_to_text(payload),
+                false
+            );
+            return true;
+        }
+
+        if (path_matches(options_.readiness_path)) {
+            storage::StoreStats stats;
+            const auto stats_status = store_.get_stats(stats);
+            if (!stats_status.ok()) {
+                nlohmann::json payload {
+                    {"service", "hostindexer"},
+                    {"ready", false},
+                    {"error", stats_status.message}
+                };
+                send_http_response(
+                    http::status::service_unavailable,
+                    "application/json; charset=utf-8",
+                    crud::json_to_text(payload),
+                    false
+                );
+                return true;
+            }
+
+            nlohmann::json payload {
+                {"service", "hostindexer"},
+                {"ready", true},
+                {"snapshots_count", stats.snapshots_count},
+                {"deltas_count", stats.deltas_count},
+                {"transport_outbox_count", stats.transport_outbox_count},
+                {"transport_consumers_count", stats.transport_consumers_count},
+                {"next_transport_sequence", stats.next_transport_sequence}
+            };
+            send_http_response(
+                http::status::ok,
+                "application/json; charset=utf-8",
+                crud::json_to_text(payload),
+                false
+            );
+            return true;
+        }
+
+        if (path_matches(options_.metrics_path)) {
+            storage::StoreStats stats;
+            const auto stats_status = store_.get_stats(stats);
+            if (!stats_status.ok()) {
+                std::ostringstream body;
+                body << "# hostindexer metrics unavailable\n";
+                body << "hostindexer_metrics_up 0\n";
+                send_http_response(
+                    http::status::service_unavailable,
+                    "text/plain; version=0.0.4; charset=utf-8",
+                    body.str(),
+                    false
+                );
+                return true;
+            }
+
+            std::ostringstream body;
+            body << "# HELP hostindexer_metrics_up Whether HostIndexer metrics are available.\n";
+            body << "# TYPE hostindexer_metrics_up gauge\n";
+            body << "hostindexer_metrics_up 1\n";
+            body << "# TYPE hostindexer_snapshots_count gauge\n";
+            body << "hostindexer_snapshots_count " << stats.snapshots_count << '\n';
+            body << "# TYPE hostindexer_deltas_count gauge\n";
+            body << "hostindexer_deltas_count " << stats.deltas_count << '\n';
+            body << "# TYPE hostindexer_transport_outbox_count gauge\n";
+            body << "hostindexer_transport_outbox_count " << stats.transport_outbox_count << '\n';
+            body << "# TYPE hostindexer_transport_consumers_count gauge\n";
+            body << "hostindexer_transport_consumers_count " << stats.transport_consumers_count << '\n';
+            body << "# TYPE hostindexer_next_transport_sequence gauge\n";
+            body << "hostindexer_next_transport_sequence " << stats.next_transport_sequence << '\n';
+            send_http_response(
+                http::status::ok,
+                "text/plain; version=0.0.4; charset=utf-8",
+                body.str(),
+                false
+            );
+            return true;
+        }
+
+        return false;
+    }
+
     void on_upgrade_request(const beast::error_code& error, const std::size_t) {
         if (error) {
             std::ostringstream text;
@@ -204,6 +351,9 @@ private:
         }
 
         if (!websocket::is_upgrade(handshake_request_)) {
+            if (handle_operational_http_request()) {
+                return;
+            }
             std::ostringstream text;
             text << "session=" << session_id_ << " rejected non-websocket upgrade request";
             log_ws("protocol", text.str());
@@ -286,13 +436,31 @@ private:
         }
 
         if (type == "ingest_ack") {
+            if (!hello_accepted_) {
+                enqueue_json(
+                    crud::to_json(
+                        make_error_result(
+                            parsed_json->value("request_id", ""),
+                            "hello must be completed before ingest_ack."
+                        )
+                    )
+                );
+                return;
+            }
             handle_ingest_ack(*parsed_json);
             return;
         }
 
         if (type == "crud_command") {
             if (!hello_accepted_) {
-                enqueue_json(crud::to_json(make_error_result("", "hello must be completed before crud_command.")));
+                enqueue_json(
+                    crud::to_json(
+                        make_error_result(
+                            parsed_json->value("request_id", ""),
+                            "hello must be completed before crud_command."
+                        )
+                    )
+                );
                 return;
             }
             handle_command(*parsed_json);
@@ -337,23 +505,38 @@ private:
             return;
         }
 
-        if (!options_.bridge_auth_token.empty() &&
-            hello->auth_token != options_.bridge_auth_token) {
+        if (const auto auth_error = validate_bridge_auth_token(*hello, options_); auth_error.has_value()) {
             ack.accepted = false;
-            ack.reason = "bridge auth token mismatch.";
+            ack.reason = *auth_error;
             std::ostringstream text;
-            text << "session=" << session_id_ << " hello rejected: bridge auth token mismatch";
+            text << "session=" << session_id_ << " hello rejected: bridge auth token validation failed";
             log_ws("auth", text.str());
+            enqueue_json(crud::to_json(ack));
+            return;
+        }
+
+        const std::string consumer_id = hello->client_instance_id + ":" + hello->host_id;
+        const auto register_status = store_.register_transport_consumer(consumer_id);
+        if (!register_status.ok()) {
+            ack.accepted = false;
+            ack.reason = "failed to initialize transport consumer state.";
+            std::ostringstream text;
+            text << "session=" << session_id_ << " hello rejected: failed to register consumer_id="
+                 << consumer_id << " message=" << register_status.message;
+            log_ws("store", text.str());
             enqueue_json(crud::to_json(ack));
             return;
         }
 
         hello_accepted_ = true;
         peer_host_id_ = hello->host_id;
+        peer_client_instance_id_ = hello->client_instance_id;
+        consumer_id_ = consumer_id;
         {
             std::ostringstream text;
             text << "session=" << session_id_ << " hello accepted host_id=" << peer_host_id_
-                 << " client_instance_id=" << hello->client_instance_id;
+                 << " client_instance_id=" << hello->client_instance_id
+                 << " consumer_id=" << consumer_id_;
             log_ws("protocol", text.str());
         }
         ack.accepted = true;
@@ -375,18 +558,30 @@ private:
             return;
         }
 
-        const auto ack_status = store_.ack_transport_until(ingest_ack->ack_sequence);
+        const auto ack_status = store_.ack_transport_until_for_consumer(consumer_id_, ingest_ack->ack_sequence);
         if (!ack_status.ok()) {
             enqueue_json(crud::to_json(make_error_result(ingest_ack->request_id, ack_status.message)));
             std::ostringstream text;
-            text << "session=" << session_id_ << " ack_transport_until failed request_id=" << ingest_ack->request_id
+            text << "session=" << session_id_
+                 << " consumer_id=" << consumer_id_
+                 << " ack_transport_until_for_consumer failed request_id=" << ingest_ack->request_id
                  << " ack_sequence=" << ingest_ack->ack_sequence
                  << " message=" << ack_status.message;
             log_ws("store", text.str());
         } else {
             std::ostringstream text;
-            text << "session=" << session_id_ << " acked transport until sequence=" << ingest_ack->ack_sequence;
+            text << "session=" << session_id_
+                 << " consumer_id=" << consumer_id_
+                 << " acked transport until sequence=" << ingest_ack->ack_sequence;
             log_ws("store", text.str());
+
+            const auto compact_status = store_.compact_transport_up_to_min_acked();
+            if (!compact_status.ok()) {
+                std::ostringstream compact_text;
+                compact_text << "session=" << session_id_
+                             << " compact_transport_up_to_min_acked failed message=" << compact_status.message;
+                log_ws("store", compact_text.str());
+            }
         }
     }
 
@@ -425,9 +620,15 @@ private:
             : static_cast<std::size_t>(command.outbox_batch_size);
 
         if (command.ack_sequence > 0U) {
-            const auto ack_status = store_.ack_transport_until(command.ack_sequence);
+            const auto ack_status = store_.ack_transport_until_for_consumer(consumer_id_, command.ack_sequence);
             if (!ack_status.ok()) {
                 result.message = ack_status.message;
+                return result;
+            }
+
+            const auto compact_status = store_.compact_transport_up_to_min_acked();
+            if (!compact_status.ok()) {
+                result.message = compact_status.message;
                 return result;
             }
         }
@@ -436,6 +637,7 @@ private:
             case crud::Operation::Read: {
                 const auto fetch_status = append_transport_records(
                     store_,
+                    consumer_id_,
                     batch_size,
                     result.records
                 );
@@ -458,7 +660,7 @@ private:
                 api::PipelineResult pipeline_result;
                 {
                     std::lock_guard<std::mutex> lock(pipeline_mutex_);
-                    pipeline_result = pipeline_.capture_snapshot(*root_path, {}, true);
+                    pipeline_result = pipeline_.capture_snapshot(*root_path, options_.scan_options, true);
                 }
 
                 if (!pipeline_result.ok() || !pipeline_result.transport_snapshot_status.ok()) {
@@ -466,9 +668,22 @@ private:
                     return result;
                 }
 
+                if (options_.retention_keep_latest_snapshots > 0U) {
+                    storage::RetentionCleanupStats retention_stats;
+                    const auto retention_status = store_.apply_snapshot_retention(
+                        options_.retention_keep_latest_snapshots,
+                        &retention_stats
+                    );
+                    if (!retention_status.ok()) {
+                        result.message = retention_status.message;
+                        return result;
+                    }
+                }
+
                 result.snapshot_id = pipeline_result.snapshot_build.snapshot.snapshot_id;
                 const auto fetch_status = append_transport_records(
                     store_,
+                    consumer_id_,
                     batch_size,
                     result.records
                 );
@@ -500,7 +715,12 @@ private:
                 api::PipelineResult pipeline_result;
                 {
                     std::lock_guard<std::mutex> lock(pipeline_mutex_);
-                    pipeline_result = pipeline_.capture_snapshot_and_delta(*root_path, base_snapshot, {}, true);
+                    pipeline_result = pipeline_.capture_snapshot_and_delta(
+                        *root_path,
+                        base_snapshot,
+                        options_.scan_options,
+                        true
+                    );
                 }
 
                 if (!pipeline_result.ok() ||
@@ -510,12 +730,25 @@ private:
                     return result;
                 }
 
+                if (options_.retention_keep_latest_snapshots > 0U) {
+                    storage::RetentionCleanupStats retention_stats;
+                    const auto retention_status = store_.apply_snapshot_retention(
+                        options_.retention_keep_latest_snapshots,
+                        &retention_stats
+                    );
+                    if (!retention_status.ok()) {
+                        result.message = retention_status.message;
+                        return result;
+                    }
+                }
+
                 result.base_snapshot_id = base_snapshot;
                 result.target_snapshot_id = pipeline_result.snapshot_build.snapshot.snapshot_id;
                 result.snapshot_id = result.target_snapshot_id;
 
                 const auto fetch_status = append_transport_records(
                     store_,
+                    consumer_id_,
                     batch_size,
                     result.records
                 );
@@ -530,8 +763,8 @@ private:
             }
 
             case crud::Operation::Delete: {
-                result.ok = true;
-                result.message = "acknowledged";
+                result.ok = false;
+                result.message = "delete_not_implemented";
                 return result;
             }
         }
@@ -590,6 +823,8 @@ private:
     std::mutex& pipeline_mutex_;
     bool hello_accepted_ {false};
     std::string peer_host_id_ {};
+    std::string peer_client_instance_id_ {};
+    std::string consumer_id_ {};
 };
 
 } // namespace
@@ -608,6 +843,18 @@ WebsocketCrudServer::WebsocketCrudServer(boost::asio::io_context& io_context,
 storage::StoreStatus WebsocketCrudServer::start() {
     if (running_) {
         return storage::StoreStatus::success();
+    }
+    if (options_.security_mode == TransportSecurityMode::Prod && options_.bridge_auth_token.empty()) {
+        return storage::StoreStatus::failure(
+            storage::StoreErrorCode::InvalidArgument,
+            "bridge_auth_token is required when security mode is prod."
+        );
+    }
+    if (options_.security_mode == TransportSecurityMode::Prod && !options_.allow_plain_websocket_in_prod) {
+        return storage::StoreStatus::failure(
+            storage::StoreErrorCode::InvalidArgument,
+            "allow_plain_websocket_in_prod must be explicitly enabled in prod mode when TLS is terminated externally."
+        );
     }
 
     boost::system::error_code error;
@@ -641,7 +888,17 @@ storage::StoreStatus WebsocketCrudServer::start() {
         std::ostringstream text;
         text << "listening on " << options_.listen_address << ':' << options_.port
              << " path=" << options_.websocket_path
+             << " health_path=" << options_.health_path
+             << " readiness_path=" << options_.readiness_path
+             << " metrics_path=" << options_.metrics_path
              << " default_outbox_batch=" << options_.default_outbox_batch_size
+             << " scan_follow_symlinks=" << (options_.scan_options.follow_symlinks ? "true" : "false")
+             << " scan_max_entries=" << options_.scan_options.max_entries
+             << " scan_include_globs=" << options_.scan_options.include_globs.size()
+             << " scan_exclude_globs=" << options_.scan_options.exclude_globs.size()
+             << " retention_keep_latest_snapshots=" << options_.retention_keep_latest_snapshots
+             << " security_mode=" << security_mode_name(options_.security_mode)
+             << " allow_plain_websocket_in_prod=" << (options_.allow_plain_websocket_in_prod ? "true" : "false")
              << " allowed_client_instance_id=" << options_.allowed_client_instance_id
              << " bridge_auth_token_configured="
              << (options_.bridge_auth_token.empty() ? "false" : "true");

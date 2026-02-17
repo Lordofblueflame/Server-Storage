@@ -53,6 +53,9 @@ struct RawScanResult {
 struct ScanOptions {
     bool follow_symlinks {false};
     std::size_t max_entries {5'000'000};
+    std::vector<std::string> include_globs {};
+    std::vector<std::string> exclude_globs {};
+    bool case_sensitive_globs {false};
 };
 
 class IFilesystemScanner {

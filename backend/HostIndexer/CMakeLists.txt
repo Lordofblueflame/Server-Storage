@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.20)
 
 project(HostIndexer VERSION 0.3.0 LANGUAGES C CXX)
 
+# CMake 4 warns about FindBoost policy unless explicitly set.
+if (POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -63,6 +68,9 @@ target_link_libraries(host_indexer_lib PUBLIC
     Boost::system
     Threads::Threads
 )
+if (TARGET Boost::throw_exception)
+    target_link_libraries(host_indexer_lib PUBLIC Boost::throw_exception)
+endif()
 
 add_executable(host_indexer_cli main.cpp)
 target_link_libraries(host_indexer_cli PRIVATE host_indexer_lib)
@@ -75,10 +83,10 @@ add_test(NAME host_indexer_tests COMMAND host_indexer_tests)
 
 if (MSVC)
     target_compile_options(lmdb PRIVATE /W3)
-    target_compile_options(host_indexer_codec PRIVATE /W4)
-    target_compile_options(host_indexer_lib PRIVATE /W4)
-    target_compile_options(host_indexer_cli PRIVATE /W4)
-    target_compile_options(host_indexer_tests PRIVATE /W4)
+    target_compile_options(host_indexer_codec PRIVATE /W4 /EHsc)
+    target_compile_options(host_indexer_lib PRIVATE /W4 /EHsc)
+    target_compile_options(host_indexer_cli PRIVATE /W4 /EHsc)
+    target_compile_options(host_indexer_tests PRIVATE /W4 /EHsc)
 else()
     target_compile_options(lmdb PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(host_indexer_codec PRIVATE -Wall -Wextra -Wpedantic)

@@ -1,0 +1,128 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base-common",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "base-vcpkg",
+      "hidden": true,
+      "inherits": "base-common",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "dev-debug",
+      "inherits": "base-vcpkg",
+      "description": "Developer debug build using vcpkg manifest dependencies.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "dev-release",
+      "inherits": "base-vcpkg",
+      "description": "Developer release build using vcpkg manifest dependencies.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "dev-debug-system",
+      "inherits": "base-common",
+      "description": "Developer debug build using system dependencies (no vcpkg toolchain).",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "ci-linux-clang-release",
+      "inherits": "base-vcpkg",
+      "description": "CI Linux release build with clang.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "ci-windows-msvc-release",
+      "inherits": "base-vcpkg",
+      "description": "CI Windows release build with MSVC toolchain.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev-debug",
+      "configurePreset": "dev-debug"
+    },
+    {
+      "name": "dev-release",
+      "configurePreset": "dev-release"
+    },
+    {
+      "name": "dev-debug-system",
+      "configurePreset": "dev-debug-system"
+    },
+    {
+      "name": "ci-linux-clang-release",
+      "configurePreset": "ci-linux-clang-release"
+    },
+    {
+      "name": "ci-windows-msvc-release",
+      "configurePreset": "ci-windows-msvc-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev-debug",
+      "configurePreset": "dev-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-release",
+      "configurePreset": "dev-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-debug-system",
+      "configurePreset": "dev-debug-system",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-linux-clang-release",
+      "configurePreset": "ci-linux-clang-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-windows-msvc-release",
+      "configurePreset": "ci-windows-msvc-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 #include "../domain/serialization/serialization.hpp"
@@ -17,8 +18,10 @@ constexpr std::string_view kDbMeta = "meta";
 constexpr std::string_view kDbSnapshots = "snapshots";
 constexpr std::string_view kDbDeltas = "deltas";
 constexpr std::string_view kDbTransport = "transport_outbox";
+constexpr std::string_view kDbTransportConsumers = "transport_consumers";
 
 constexpr std::string_view kKeyNextSequence = "next_transport_sequence";
+constexpr std::string_view kLegacyTransportConsumerId = "__legacy_global_consumer__";
 
 struct DeltaKey {
     std::array<std::uint8_t, 16> bytes {};
@@ -192,6 +195,7 @@ LmdbStore::LmdbStore(LmdbStore&& other) noexcept {
     snapshots_dbi_ = std::exchange(other.snapshots_dbi_, 0);
     deltas_dbi_ = std::exchange(other.deltas_dbi_, 0);
     transport_dbi_ = std::exchange(other.transport_dbi_, 0);
+    transport_consumers_dbi_ = std::exchange(other.transport_consumers_dbi_, 0);
     open_ = std::exchange(other.open_, false);
 }
 
@@ -203,6 +207,7 @@ LmdbStore& LmdbStore::operator=(LmdbStore&& other) noexcept {
         snapshots_dbi_ = std::exchange(other.snapshots_dbi_, 0);
         deltas_dbi_ = std::exchange(other.deltas_dbi_, 0);
         transport_dbi_ = std::exchange(other.transport_dbi_, 0);
+        transport_consumers_dbi_ = std::exchange(other.transport_consumers_dbi_, 0);
         open_ = std::exchange(other.open_, false);
     }
     return *this;
@@ -294,6 +299,7 @@ void LmdbStore::close() {
         mdb_dbi_close(env_, snapshots_dbi_);
         mdb_dbi_close(env_, deltas_dbi_);
         mdb_dbi_close(env_, transport_dbi_);
+        mdb_dbi_close(env_, transport_consumers_dbi_);
         mdb_env_close(env_);
         env_ = nullptr;
     }
@@ -302,6 +308,7 @@ void LmdbStore::close() {
     snapshots_dbi_ = 0;
     deltas_dbi_ = 0;
     transport_dbi_ = 0;
+    transport_consumers_dbi_ = 0;
     open_ = false;
 }
 
@@ -344,6 +351,11 @@ StoreStatus LmdbStore::initialize_dbs(MDB_txn* write_txn) {
     rc = mdb_dbi_open(write_txn, kDbTransport.data(), MDB_CREATE, &transport_dbi_);
     if (rc != MDB_SUCCESS) {
         return lmdb_error(rc, "mdb_dbi_open(transport)");
+    }
+
+    rc = mdb_dbi_open(write_txn, kDbTransportConsumers.data(), MDB_CREATE, &transport_consumers_dbi_);
+    if (rc != MDB_SUCCESS) {
+        return lmdb_error(rc, "mdb_dbi_open(transport_consumers)");
     }
 
     std::uint64_t current_next = 0;
@@ -455,6 +467,79 @@ StoreStatus LmdbStore::put_snapshot(const domain::Snapshot& snapshot, const bool
     return StoreStatus::success();
 }
 
+StoreStatus LmdbStore::put_snapshot_with_transport(const domain::Snapshot& snapshot,
+                                                   const bool enqueue_transport,
+                                                   const bool validate_before_store,
+                                                   std::uint64_t* out_transport_sequence) {
+    if (!is_open()) {
+        return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
+    }
+
+    if (validate_before_store) {
+        const auto validate_status = validate_snapshot_for_store(snapshot);
+        if (!validate_status.ok()) {
+            return validate_status;
+        }
+    }
+
+    std::ostringstream snapshot_buffer(std::ios::binary);
+    const auto snapshot_serialize = serialization::serialize_snapshot_binary(snapshot, snapshot_buffer);
+    const auto snapshot_serialize_status = serialization_to_store_status(
+        snapshot_serialize,
+        "serialize_snapshot_binary"
+    );
+    if (!snapshot_serialize_status.ok()) {
+        return snapshot_serialize_status;
+    }
+
+    const std::string snapshot_payload = snapshot_buffer.str();
+    const auto snapshot_key = encode_u64_be(snapshot.snapshot_id);
+    const std::vector<std::uint8_t> snapshot_transport_payload(snapshot_payload.begin(), snapshot_payload.end());
+
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    MDB_txn* write_txn = nullptr;
+    auto status = begin_txn(&write_txn, 0U);
+    if (!status.ok()) {
+        return status;
+    }
+
+    status = put_blob(
+        snapshots_dbi_,
+        write_txn,
+        snapshot_key.data(),
+        snapshot_key.size(),
+        snapshot_payload.data(),
+        snapshot_payload.size(),
+        0U
+    );
+    if (!status.ok()) {
+        mdb_txn_abort(write_txn);
+        return status;
+    }
+
+    if (enqueue_transport) {
+        status = enqueue_transport_record_in_txn(
+            write_txn,
+            TransportRecordType::Snapshot,
+            snapshot.host_identifier,
+            snapshot_transport_payload,
+            unix_now_u64(),
+            out_transport_sequence
+        );
+        if (!status.ok()) {
+            mdb_txn_abort(write_txn);
+            return status;
+        }
+    }
+
+    const int commit_rc = mdb_txn_commit(write_txn);
+    if (commit_rc != MDB_SUCCESS) {
+        return lmdb_error(commit_rc, "mdb_txn_commit(put_snapshot_with_transport)");
+    }
+
+    return StoreStatus::success();
+}
+
 StoreStatus LmdbStore::get_snapshot(const domain::SnapshotId snapshot_id,
                                     domain::Snapshot& out_snapshot,
                                     const bool validate_after_read) const {
@@ -544,6 +629,126 @@ StoreStatus LmdbStore::put_delta(const domain::DeltaSnapshot& delta,
     const int commit_rc = mdb_txn_commit(write_txn);
     if (commit_rc != MDB_SUCCESS) {
         return lmdb_error(commit_rc, "mdb_txn_commit(put_delta)");
+    }
+
+    return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::put_snapshot_and_delta_with_transport(
+    const domain::Snapshot& snapshot,
+    const domain::DeltaSnapshot& delta,
+    const domain::Snapshot* base_snapshot,
+    const bool enqueue_transport,
+    const bool validate_before_store,
+    std::uint64_t* out_snapshot_transport_sequence,
+    std::uint64_t* out_delta_transport_sequence) {
+    if (!is_open()) {
+        return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
+    }
+
+    if (validate_before_store) {
+        const auto snapshot_validation_status = validate_snapshot_for_store(snapshot);
+        if (!snapshot_validation_status.ok()) {
+            return snapshot_validation_status;
+        }
+        const auto delta_validation_status = validate_delta_for_store(delta, base_snapshot, &snapshot);
+        if (!delta_validation_status.ok()) {
+            return delta_validation_status;
+        }
+    }
+
+    std::ostringstream snapshot_buffer(std::ios::binary);
+    const auto snapshot_serialize = serialization::serialize_snapshot_binary(snapshot, snapshot_buffer);
+    const auto snapshot_serialize_status = serialization_to_store_status(
+        snapshot_serialize,
+        "serialize_snapshot_binary"
+    );
+    if (!snapshot_serialize_status.ok()) {
+        return snapshot_serialize_status;
+    }
+    const std::string snapshot_payload = snapshot_buffer.str();
+    const auto snapshot_key = encode_u64_be(snapshot.snapshot_id);
+    const std::vector<std::uint8_t> snapshot_transport_payload(snapshot_payload.begin(), snapshot_payload.end());
+
+    std::ostringstream delta_buffer(std::ios::binary);
+    const auto delta_serialize = serialization::serialize_delta_binary(delta, delta_buffer);
+    const auto delta_serialize_status = serialization_to_store_status(delta_serialize, "serialize_delta_binary");
+    if (!delta_serialize_status.ok()) {
+        return delta_serialize_status;
+    }
+    const std::string delta_payload = delta_buffer.str();
+    const auto delta_key = make_delta_key(delta.base_snapshot_id, delta.target_snapshot_id);
+    const std::vector<std::uint8_t> delta_transport_payload(delta_payload.begin(), delta_payload.end());
+
+    std::ostringstream delta_route;
+    delta_route << delta.base_snapshot_id << "->" << delta.target_snapshot_id;
+
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    MDB_txn* write_txn = nullptr;
+    auto status = begin_txn(&write_txn, 0U);
+    if (!status.ok()) {
+        return status;
+    }
+
+    status = put_blob(
+        snapshots_dbi_,
+        write_txn,
+        snapshot_key.data(),
+        snapshot_key.size(),
+        snapshot_payload.data(),
+        snapshot_payload.size(),
+        0U
+    );
+    if (!status.ok()) {
+        mdb_txn_abort(write_txn);
+        return status;
+    }
+
+    status = put_blob(
+        deltas_dbi_,
+        write_txn,
+        delta_key.bytes.data(),
+        delta_key.bytes.size(),
+        delta_payload.data(),
+        delta_payload.size(),
+        0U
+    );
+    if (!status.ok()) {
+        mdb_txn_abort(write_txn);
+        return status;
+    }
+
+    if (enqueue_transport) {
+        status = enqueue_transport_record_in_txn(
+            write_txn,
+            TransportRecordType::Snapshot,
+            snapshot.host_identifier,
+            snapshot_transport_payload,
+            unix_now_u64(),
+            out_snapshot_transport_sequence
+        );
+        if (!status.ok()) {
+            mdb_txn_abort(write_txn);
+            return status;
+        }
+
+        status = enqueue_transport_record_in_txn(
+            write_txn,
+            TransportRecordType::Delta,
+            delta_route.str(),
+            delta_transport_payload,
+            unix_now_u64(),
+            out_delta_transport_sequence
+        );
+        if (!status.ok()) {
+            mdb_txn_abort(write_txn);
+            return status;
+        }
+    }
+
+    const int commit_rc = mdb_txn_commit(write_txn);
+    if (commit_rc != MDB_SUCCESS) {
+        return lmdb_error(commit_rc, "mdb_txn_commit(put_snapshot_and_delta_with_transport)");
     }
 
     return StoreStatus::success();
@@ -654,6 +859,44 @@ StoreStatus LmdbStore::enqueue_delta(const domain::DeltaSnapshot& delta,
     );
 }
 
+StoreStatus LmdbStore::enqueue_transport_record_in_txn(MDB_txn* write_txn,
+                                                       const TransportRecordType type,
+                                                       const std::string_view routing_key,
+                                                       const std::vector<std::uint8_t>& payload,
+                                                       const std::uint64_t created_at,
+                                                       std::uint64_t* out_sequence) const {
+    if (write_txn == nullptr) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Write transaction is null.");
+    }
+
+    std::uint64_t sequence = 0;
+    auto status = reserve_next_sequence(write_txn, sequence);
+    if (!status.ok()) {
+        return status;
+    }
+
+    const auto key = encode_u64_be(sequence);
+    const auto frame = serialize_frame(type, routing_key, payload, created_at);
+    status = put_blob(
+        transport_dbi_,
+        write_txn,
+        key.data(),
+        key.size(),
+        frame.data(),
+        frame.size(),
+        0U
+    );
+    if (!status.ok()) {
+        return status;
+    }
+
+    if (out_sequence != nullptr) {
+        *out_sequence = sequence;
+    }
+
+    return StoreStatus::success();
+}
+
 StoreStatus LmdbStore::enqueue_transport_record(const TransportRecordType type,
                                                 const std::string_view routing_key,
                                                 const std::vector<std::uint8_t>& payload,
@@ -670,24 +913,13 @@ StoreStatus LmdbStore::enqueue_transport_record(const TransportRecordType type,
         return status;
     }
 
-    std::uint64_t sequence = 0;
-    status = reserve_next_sequence(write_txn, sequence);
-    if (!status.ok()) {
-        mdb_txn_abort(write_txn);
-        return status;
-    }
-
-    const auto key = encode_u64_be(sequence);
-    const auto frame = serialize_frame(type, routing_key, payload, created_at);
-
-    status = put_blob(
-        transport_dbi_,
+    status = enqueue_transport_record_in_txn(
         write_txn,
-        key.data(),
-        key.size(),
-        frame.data(),
-        frame.size(),
-        0U
+        type,
+        routing_key,
+        payload,
+        created_at,
+        out_sequence
     );
     if (!status.ok()) {
         mdb_txn_abort(write_txn);
@@ -697,10 +929,6 @@ StoreStatus LmdbStore::enqueue_transport_record(const TransportRecordType type,
     const int commit_rc = mdb_txn_commit(write_txn);
     if (commit_rc != MDB_SUCCESS) {
         return lmdb_error(commit_rc, "mdb_txn_commit(enqueue_transport_record)");
-    }
-
-    if (out_sequence != nullptr) {
-        *out_sequence = sequence;
     }
 
     return StoreStatus::success();
@@ -740,6 +968,59 @@ StoreStatus LmdbStore::write_next_sequence(MDB_txn* write_txn, const std::uint64
     );
 }
 
+StoreStatus LmdbStore::read_consumer_ack_sequence(MDB_txn* txn,
+                                                  const std::string_view consumer_id,
+                                                  std::uint64_t& out_sequence) const {
+    if (txn == nullptr) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Transaction is null.");
+    }
+    if (consumer_id.empty()) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Consumer id must not be empty.");
+    }
+
+    MDB_val key {
+        consumer_id.size(),
+        const_cast<char*>(consumer_id.data())
+    };
+    MDB_val value {};
+    const int rc = mdb_get(txn, transport_consumers_dbi_, &key, &value);
+    if (rc == MDB_NOTFOUND) {
+        return StoreStatus::failure(StoreErrorCode::NotFound, "Transport consumer is not registered.");
+    }
+    if (rc != MDB_SUCCESS) {
+        return lmdb_error(rc, "mdb_get(transport_consumer_ack)");
+    }
+
+    if (value.mv_size != 8U) {
+        return StoreStatus::failure(StoreErrorCode::CorruptedPayload, "Invalid transport consumer ack payload size.");
+    }
+
+    out_sequence = decode_u64_be(value.mv_data);
+    return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::write_consumer_ack_sequence(MDB_txn* txn,
+                                                   const std::string_view consumer_id,
+                                                   const std::uint64_t sequence) const {
+    if (txn == nullptr) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Transaction is null.");
+    }
+    if (consumer_id.empty()) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Consumer id must not be empty.");
+    }
+
+    const auto encoded = encode_u64_be(sequence);
+    return put_blob(
+        transport_consumers_dbi_,
+        txn,
+        consumer_id.data(),
+        consumer_id.size(),
+        encoded.data(),
+        encoded.size(),
+        0U
+    );
+}
+
 StoreStatus LmdbStore::reserve_next_sequence(MDB_txn* write_txn, std::uint64_t& out_sequence) const {
     std::uint64_t next_sequence = 0;
     auto status = read_next_sequence(write_txn, next_sequence);
@@ -758,14 +1039,56 @@ StoreStatus LmdbStore::reserve_next_sequence(MDB_txn* write_txn, std::uint64_t& 
     return StoreStatus::success();
 }
 
-StoreStatus LmdbStore::fetch_transport_batch(const std::size_t max_items,
-                                             std::vector<TransportRecord>& out_records) const {
+StoreStatus LmdbStore::register_transport_consumer(const std::string_view consumer_id) {
     if (!is_open()) {
         return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
     }
+    if (consumer_id.empty()) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Consumer id must not be empty.");
+    }
 
-    if (max_items == 0) {
-        out_records.clear();
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    MDB_txn* write_txn = nullptr;
+    auto status = begin_txn(&write_txn, 0U);
+    if (!status.ok()) {
+        return status;
+    }
+
+    std::uint64_t current_ack = 0U;
+    status = read_consumer_ack_sequence(write_txn, consumer_id, current_ack);
+    if (status.code == StoreErrorCode::NotFound) {
+        status = write_consumer_ack_sequence(write_txn, consumer_id, 0U);
+        if (!status.ok()) {
+            mdb_txn_abort(write_txn);
+            return status;
+        }
+    } else if (!status.ok()) {
+        mdb_txn_abort(write_txn);
+        return status;
+    } else {
+        mdb_txn_abort(write_txn);
+        return StoreStatus::success();
+    }
+
+    const int commit_rc = mdb_txn_commit(write_txn);
+    if (commit_rc != MDB_SUCCESS) {
+        return lmdb_error(commit_rc, "mdb_txn_commit(register_transport_consumer)");
+    }
+    return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::fetch_transport_batch_for_consumer(const std::string_view consumer_id,
+                                                          const std::size_t max_items,
+                                                          std::vector<TransportRecord>& out_records) const {
+    if (!is_open()) {
+        return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
+    }
+    if (consumer_id.empty()) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Consumer id must not be empty.");
+    }
+
+    out_records.clear();
+    if (max_items == 0U) {
         return StoreStatus::success();
     }
 
@@ -775,6 +1098,16 @@ StoreStatus LmdbStore::fetch_transport_batch(const std::size_t max_items,
         return status;
     }
 
+    std::uint64_t last_acked_sequence = 0U;
+    status = read_consumer_ack_sequence(read_txn, consumer_id, last_acked_sequence);
+    if (!status.ok() && status.code != StoreErrorCode::NotFound) {
+        mdb_txn_abort(read_txn);
+        return status;
+    }
+    if (status.code == StoreErrorCode::NotFound) {
+        last_acked_sequence = 0U;
+    }
+
     MDB_cursor* cursor = nullptr;
     const int cursor_rc = mdb_cursor_open(read_txn, transport_dbi_, &cursor);
     if (cursor_rc != MDB_SUCCESS) {
@@ -782,12 +1115,20 @@ StoreStatus LmdbStore::fetch_transport_batch(const std::size_t max_items,
         return lmdb_error(cursor_rc, "mdb_cursor_open(transport)");
     }
 
-    out_records.clear();
     out_records.reserve(max_items);
 
     MDB_val key {};
     MDB_val value {};
-    int rc = mdb_cursor_get(cursor, &key, &value, MDB_FIRST);
+    int rc = MDB_NOTFOUND;
+    if (last_acked_sequence == 0U) {
+        rc = mdb_cursor_get(cursor, &key, &value, MDB_FIRST);
+    } else {
+        const auto next_sequence_key = encode_u64_be(last_acked_sequence + 1U);
+        key.mv_size = next_sequence_key.size();
+        key.mv_data = const_cast<std::uint8_t*>(next_sequence_key.data());
+        rc = mdb_cursor_get(cursor, &key, &value, MDB_SET_RANGE);
+    }
+
     while (rc == MDB_SUCCESS && out_records.size() < max_items) {
         if (key.mv_size != 8U) {
             mdb_cursor_close(cursor);
@@ -819,7 +1160,49 @@ StoreStatus LmdbStore::fetch_transport_batch(const std::size_t max_items,
     return StoreStatus::success();
 }
 
-StoreStatus LmdbStore::ack_transport_until(const std::uint64_t inclusive_sequence) {
+StoreStatus LmdbStore::ack_transport_until_for_consumer(const std::string_view consumer_id,
+                                                        const std::uint64_t inclusive_sequence) {
+    if (!is_open()) {
+        return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
+    }
+    if (consumer_id.empty()) {
+        return StoreStatus::failure(StoreErrorCode::InvalidArgument, "Consumer id must not be empty.");
+    }
+
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    MDB_txn* write_txn = nullptr;
+    auto status = begin_txn(&write_txn, 0U);
+    if (!status.ok()) {
+        return status;
+    }
+
+    std::uint64_t current_ack = 0U;
+    status = read_consumer_ack_sequence(write_txn, consumer_id, current_ack);
+    if (!status.ok() && status.code != StoreErrorCode::NotFound) {
+        mdb_txn_abort(write_txn);
+        return status;
+    }
+
+    const std::uint64_t updated_ack = std::max(current_ack, inclusive_sequence);
+    if (status.code == StoreErrorCode::NotFound || updated_ack != current_ack) {
+        status = write_consumer_ack_sequence(write_txn, consumer_id, updated_ack);
+        if (!status.ok()) {
+            mdb_txn_abort(write_txn);
+            return status;
+        }
+    } else {
+        mdb_txn_abort(write_txn);
+        return StoreStatus::success();
+    }
+
+    const int commit_rc = mdb_txn_commit(write_txn);
+    if (commit_rc != MDB_SUCCESS) {
+        return lmdb_error(commit_rc, "mdb_txn_commit(ack_transport_until_for_consumer)");
+    }
+    return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::compact_transport_up_to_min_acked() {
     if (!is_open()) {
         return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
     }
@@ -831,51 +1214,361 @@ StoreStatus LmdbStore::ack_transport_until(const std::uint64_t inclusive_sequenc
         return status;
     }
 
-    MDB_cursor* cursor = nullptr;
-    const int open_cursor_rc = mdb_cursor_open(write_txn, transport_dbi_, &cursor);
-    if (open_cursor_rc != MDB_SUCCESS) {
+    MDB_cursor* consumers_cursor = nullptr;
+    int rc = mdb_cursor_open(write_txn, transport_consumers_dbi_, &consumers_cursor);
+    if (rc != MDB_SUCCESS) {
         mdb_txn_abort(write_txn);
-        return lmdb_error(open_cursor_rc, "mdb_cursor_open(ack_transport_until)");
+        return lmdb_error(rc, "mdb_cursor_open(compact_transport_consumers)");
+    }
+
+    MDB_val consumer_key {};
+    MDB_val consumer_value {};
+    rc = mdb_cursor_get(consumers_cursor, &consumer_key, &consumer_value, MDB_FIRST);
+    if (rc == MDB_NOTFOUND) {
+        mdb_cursor_close(consumers_cursor);
+        mdb_txn_abort(write_txn);
+        return StoreStatus::success();
+    }
+    if (rc != MDB_SUCCESS) {
+        mdb_cursor_close(consumers_cursor);
+        mdb_txn_abort(write_txn);
+        return lmdb_error(rc, "mdb_cursor_get(compact_transport_consumers)");
+    }
+
+    bool has_min = false;
+    std::uint64_t min_acked = 0U;
+    while (rc == MDB_SUCCESS) {
+        if (consumer_value.mv_size != 8U) {
+            mdb_cursor_close(consumers_cursor);
+            mdb_txn_abort(write_txn);
+            return StoreStatus::failure(StoreErrorCode::CorruptedPayload, "Invalid transport consumer ack payload size.");
+        }
+
+        const auto consumer_ack = decode_u64_be(consumer_value.mv_data);
+        if (!has_min || consumer_ack < min_acked) {
+            min_acked = consumer_ack;
+            has_min = true;
+        }
+
+        rc = mdb_cursor_get(consumers_cursor, &consumer_key, &consumer_value, MDB_NEXT);
+    }
+    if (rc != MDB_NOTFOUND) {
+        mdb_cursor_close(consumers_cursor);
+        mdb_txn_abort(write_txn);
+        return lmdb_error(rc, "mdb_cursor_get(compact_transport_consumers_next)");
+    }
+    mdb_cursor_close(consumers_cursor);
+
+    if (!has_min || min_acked == 0U) {
+        mdb_txn_abort(write_txn);
+        return StoreStatus::success();
+    }
+
+    MDB_cursor* transport_cursor = nullptr;
+    rc = mdb_cursor_open(write_txn, transport_dbi_, &transport_cursor);
+    if (rc != MDB_SUCCESS) {
+        mdb_txn_abort(write_txn);
+        return lmdb_error(rc, "mdb_cursor_open(compact_transport_records)");
     }
 
     MDB_val key {};
     MDB_val value {};
-    int rc = mdb_cursor_get(cursor, &key, &value, MDB_FIRST);
+    rc = mdb_cursor_get(transport_cursor, &key, &value, MDB_FIRST);
     while (rc == MDB_SUCCESS) {
         if (key.mv_size != 8U) {
-            mdb_cursor_close(cursor);
+            mdb_cursor_close(transport_cursor);
             mdb_txn_abort(write_txn);
             return StoreStatus::failure(StoreErrorCode::CorruptedPayload, "Invalid transport key size.");
         }
 
         const auto sequence = decode_u64_be(key.mv_data);
-        if (sequence > inclusive_sequence) {
+        if (sequence > min_acked) {
             break;
         }
 
-        const int delete_rc = mdb_cursor_del(cursor, 0U);
+        const int delete_rc = mdb_cursor_del(transport_cursor, 0U);
         if (delete_rc != MDB_SUCCESS) {
-            mdb_cursor_close(cursor);
+            mdb_cursor_close(transport_cursor);
             mdb_txn_abort(write_txn);
-            return lmdb_error(delete_rc, "mdb_cursor_del(ack_transport_until)");
+            return lmdb_error(delete_rc, "mdb_cursor_del(compact_transport_records)");
         }
 
-        rc = mdb_cursor_get(cursor, &key, &value, MDB_NEXT);
+        rc = mdb_cursor_get(transport_cursor, &key, &value, MDB_NEXT);
     }
-
     if (rc != MDB_SUCCESS && rc != MDB_NOTFOUND) {
-        mdb_cursor_close(cursor);
+        mdb_cursor_close(transport_cursor);
         mdb_txn_abort(write_txn);
-        return lmdb_error(rc, "mdb_cursor_get(ack_transport_until)");
+        return lmdb_error(rc, "mdb_cursor_get(compact_transport_records_next)");
     }
-
-    mdb_cursor_close(cursor);
+    mdb_cursor_close(transport_cursor);
 
     const int commit_rc = mdb_txn_commit(write_txn);
     if (commit_rc != MDB_SUCCESS) {
-        return lmdb_error(commit_rc, "mdb_txn_commit(ack_transport_until)");
+        return lmdb_error(commit_rc, "mdb_txn_commit(compact_transport_up_to_min_acked)");
+    }
+
+    return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::apply_snapshot_retention(const std::size_t keep_latest_snapshots,
+                                                RetentionCleanupStats* out_stats) {
+    if (!is_open()) {
+        return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
+    }
+
+    if (out_stats != nullptr) {
+        out_stats->snapshots_removed = 0U;
+        out_stats->deltas_removed = 0U;
+    }
+
+    struct SnapshotRetentionItem {
+        std::uint64_t snapshot_id {0U};
+        std::int64_t created_at {0};
+    };
+
+    std::lock_guard<std::mutex> lock(writer_mutex_);
+    MDB_txn* write_txn = nullptr;
+    auto status = begin_txn(&write_txn, 0U);
+    if (!status.ok()) {
+        return status;
+    }
+
+    std::vector<SnapshotRetentionItem> snapshot_items;
+    {
+        MDB_cursor* snapshots_cursor = nullptr;
+        int rc = mdb_cursor_open(write_txn, snapshots_dbi_, &snapshots_cursor);
+        if (rc != MDB_SUCCESS) {
+            mdb_txn_abort(write_txn);
+            return lmdb_error(rc, "mdb_cursor_open(apply_snapshot_retention:snapshots)");
+        }
+
+        MDB_val key {};
+        MDB_val value {};
+        rc = mdb_cursor_get(snapshots_cursor, &key, &value, MDB_FIRST);
+        while (rc == MDB_SUCCESS) {
+            if (key.mv_size != 8U) {
+                mdb_cursor_close(snapshots_cursor);
+                mdb_txn_abort(write_txn);
+                return StoreStatus::failure(StoreErrorCode::CorruptedPayload, "Invalid snapshot key size.");
+            }
+
+            domain::Snapshot snapshot;
+            const std::string payload(static_cast<const char*>(value.mv_data), value.mv_size);
+            std::istringstream input(payload, std::ios::binary);
+            const auto deserialize = serialization::deserialize_snapshot_binary(input, snapshot);
+            const auto deserialize_status = serialization_to_store_status(
+                deserialize,
+                "deserialize_snapshot_binary(apply_snapshot_retention)"
+            );
+            if (!deserialize_status.ok()) {
+                mdb_cursor_close(snapshots_cursor);
+                mdb_txn_abort(write_txn);
+                return deserialize_status;
+            }
+
+            snapshot_items.push_back(SnapshotRetentionItem {
+                decode_u64_be(key.mv_data),
+                snapshot.created_at
+            });
+
+            rc = mdb_cursor_get(snapshots_cursor, &key, &value, MDB_NEXT);
+        }
+
+        if (rc != MDB_NOTFOUND) {
+            mdb_cursor_close(snapshots_cursor);
+            mdb_txn_abort(write_txn);
+            return lmdb_error(rc, "mdb_cursor_get(apply_snapshot_retention:snapshots)");
+        }
+        mdb_cursor_close(snapshots_cursor);
+    }
+
+    if (snapshot_items.size() <= keep_latest_snapshots) {
+        mdb_txn_abort(write_txn);
+        return StoreStatus::success();
+    }
+
+    std::sort(
+        snapshot_items.begin(),
+        snapshot_items.end(),
+        [](const SnapshotRetentionItem& lhs, const SnapshotRetentionItem& rhs) {
+            if (lhs.created_at == rhs.created_at) {
+                return lhs.snapshot_id > rhs.snapshot_id;
+            }
+            return lhs.created_at > rhs.created_at;
+        }
+    );
+
+    std::unordered_set<std::uint64_t> retained_snapshot_ids;
+    retained_snapshot_ids.reserve(keep_latest_snapshots);
+    for (std::size_t index = 0U; index < keep_latest_snapshots; ++index) {
+        retained_snapshot_ids.insert(snapshot_items[index].snapshot_id);
+    }
+
+    std::size_t snapshots_removed = 0U;
+    {
+        MDB_cursor* snapshots_cursor = nullptr;
+        int rc = mdb_cursor_open(write_txn, snapshots_dbi_, &snapshots_cursor);
+        if (rc != MDB_SUCCESS) {
+            mdb_txn_abort(write_txn);
+            return lmdb_error(rc, "mdb_cursor_open(apply_snapshot_retention:delete_snapshots)");
+        }
+
+        MDB_val key {};
+        MDB_val value {};
+        rc = mdb_cursor_get(snapshots_cursor, &key, &value, MDB_FIRST);
+        while (rc == MDB_SUCCESS) {
+            if (key.mv_size != 8U) {
+                mdb_cursor_close(snapshots_cursor);
+                mdb_txn_abort(write_txn);
+                return StoreStatus::failure(StoreErrorCode::CorruptedPayload, "Invalid snapshot key size.");
+            }
+
+            const auto snapshot_id = decode_u64_be(key.mv_data);
+            if (!retained_snapshot_ids.contains(snapshot_id)) {
+                const int delete_rc = mdb_cursor_del(snapshots_cursor, 0U);
+                if (delete_rc != MDB_SUCCESS) {
+                    mdb_cursor_close(snapshots_cursor);
+                    mdb_txn_abort(write_txn);
+                    return lmdb_error(delete_rc, "mdb_cursor_del(apply_snapshot_retention:snapshot)");
+                }
+                ++snapshots_removed;
+                rc = mdb_cursor_get(snapshots_cursor, &key, &value, MDB_NEXT);
+                continue;
+            }
+
+            rc = mdb_cursor_get(snapshots_cursor, &key, &value, MDB_NEXT);
+        }
+
+        if (rc != MDB_NOTFOUND) {
+            mdb_cursor_close(snapshots_cursor);
+            mdb_txn_abort(write_txn);
+            return lmdb_error(rc, "mdb_cursor_get(apply_snapshot_retention:delete_snapshots)");
+        }
+        mdb_cursor_close(snapshots_cursor);
+    }
+
+    std::size_t deltas_removed = 0U;
+    {
+        MDB_cursor* deltas_cursor = nullptr;
+        int rc = mdb_cursor_open(write_txn, deltas_dbi_, &deltas_cursor);
+        if (rc != MDB_SUCCESS) {
+            mdb_txn_abort(write_txn);
+            return lmdb_error(rc, "mdb_cursor_open(apply_snapshot_retention:deltas)");
+        }
+
+        MDB_val key {};
+        MDB_val value {};
+        rc = mdb_cursor_get(deltas_cursor, &key, &value, MDB_FIRST);
+        while (rc == MDB_SUCCESS) {
+            if (key.mv_size != 16U) {
+                mdb_cursor_close(deltas_cursor);
+                mdb_txn_abort(write_txn);
+                return StoreStatus::failure(StoreErrorCode::CorruptedPayload, "Invalid delta key size.");
+            }
+
+            const auto* raw = static_cast<const std::uint8_t*>(key.mv_data);
+            const auto base_snapshot_id = decode_u64_be(raw);
+            const auto target_snapshot_id = decode_u64_be(raw + 8U);
+            const bool keep_delta = retained_snapshot_ids.contains(base_snapshot_id) &&
+                                    retained_snapshot_ids.contains(target_snapshot_id);
+
+            if (!keep_delta) {
+                const int delete_rc = mdb_cursor_del(deltas_cursor, 0U);
+                if (delete_rc != MDB_SUCCESS) {
+                    mdb_cursor_close(deltas_cursor);
+                    mdb_txn_abort(write_txn);
+                    return lmdb_error(delete_rc, "mdb_cursor_del(apply_snapshot_retention:delta)");
+                }
+                ++deltas_removed;
+                rc = mdb_cursor_get(deltas_cursor, &key, &value, MDB_NEXT);
+                continue;
+            }
+
+            rc = mdb_cursor_get(deltas_cursor, &key, &value, MDB_NEXT);
+        }
+
+        if (rc != MDB_NOTFOUND) {
+            mdb_cursor_close(deltas_cursor);
+            mdb_txn_abort(write_txn);
+            return lmdb_error(rc, "mdb_cursor_get(apply_snapshot_retention:deltas)");
+        }
+        mdb_cursor_close(deltas_cursor);
+    }
+
+    const int commit_rc = mdb_txn_commit(write_txn);
+    if (commit_rc != MDB_SUCCESS) {
+        return lmdb_error(commit_rc, "mdb_txn_commit(apply_snapshot_retention)");
+    }
+
+    if (out_stats != nullptr) {
+        out_stats->snapshots_removed = snapshots_removed;
+        out_stats->deltas_removed = deltas_removed;
     }
     return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::get_stats(StoreStats& out_stats) const {
+    if (!is_open()) {
+        return StoreStatus::failure(StoreErrorCode::NotOpen, "LMDB store is not open.");
+    }
+
+    MDB_txn* read_txn = nullptr;
+    auto status = begin_txn(&read_txn, MDB_RDONLY);
+    if (!status.ok()) {
+        return status;
+    }
+
+    MDB_stat stat {};
+    int rc = mdb_stat(read_txn, snapshots_dbi_, &stat);
+    if (rc != MDB_SUCCESS) {
+        mdb_txn_abort(read_txn);
+        return lmdb_error(rc, "mdb_stat(snapshots)");
+    }
+    out_stats.snapshots_count = static_cast<std::size_t>(stat.ms_entries);
+
+    rc = mdb_stat(read_txn, deltas_dbi_, &stat);
+    if (rc != MDB_SUCCESS) {
+        mdb_txn_abort(read_txn);
+        return lmdb_error(rc, "mdb_stat(deltas)");
+    }
+    out_stats.deltas_count = static_cast<std::size_t>(stat.ms_entries);
+
+    rc = mdb_stat(read_txn, transport_dbi_, &stat);
+    if (rc != MDB_SUCCESS) {
+        mdb_txn_abort(read_txn);
+        return lmdb_error(rc, "mdb_stat(transport_outbox)");
+    }
+    out_stats.transport_outbox_count = static_cast<std::size_t>(stat.ms_entries);
+
+    rc = mdb_stat(read_txn, transport_consumers_dbi_, &stat);
+    if (rc != MDB_SUCCESS) {
+        mdb_txn_abort(read_txn);
+        return lmdb_error(rc, "mdb_stat(transport_consumers)");
+    }
+    out_stats.transport_consumers_count = static_cast<std::size_t>(stat.ms_entries);
+
+    std::uint64_t next_sequence = 1U;
+    status = read_next_sequence(read_txn, next_sequence);
+    if (!status.ok() && status.code != StoreErrorCode::NotFound) {
+        mdb_txn_abort(read_txn);
+        return status;
+    }
+    if (status.code == StoreErrorCode::NotFound) {
+        next_sequence = 1U;
+    }
+    out_stats.next_transport_sequence = next_sequence;
+
+    mdb_txn_abort(read_txn);
+    return StoreStatus::success();
+}
+
+StoreStatus LmdbStore::fetch_transport_batch(const std::size_t max_items,
+                                             std::vector<TransportRecord>& out_records) const {
+    return fetch_transport_batch_for_consumer(kLegacyTransportConsumerId, max_items, out_records);
+}
+
+StoreStatus LmdbStore::ack_transport_until(const std::uint64_t inclusive_sequence) {
+    return ack_transport_until_for_consumer(kLegacyTransportConsumerId, inclusive_sequence);
 }
 
 } // namespace host_indexer::storage

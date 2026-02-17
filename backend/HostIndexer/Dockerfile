@@ -4,14 +4,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
-        libboost-system-dev \
+        libboost-all-dev \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . /app
+COPY HostIndexer /app/HostIndexer
+COPY shared /app/shared
 
-RUN cmake -S HostIndexer -B /tmp/build-hostindexer && \
+WORKDIR /app/HostIndexer
+RUN cmake -S . -B /tmp/build-hostindexer && \
     cmake --build /tmp/build-hostindexer --target host_indexer_cli -j
 
 EXPOSE 9460

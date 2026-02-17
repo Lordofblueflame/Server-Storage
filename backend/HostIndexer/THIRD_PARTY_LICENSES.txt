@@ -1,0 +1,39 @@
+HostIndexer third-party dependency license inventory
+Updated: 2026-02-17
+
+Vendored dependencies
+=====================
+
+1) LMDB
+   - Source path: lib/liblmdb
+   - License: OpenLDAP Public License 2.8
+   - License file: lib/liblmdb/LICENSE
+
+2) nlohmann/json
+   - Source path: lib/nlohmann/nlohmann
+   - License: MIT
+   - Reference: SPDX header in lib/nlohmann/nlohmann/json.hpp
+
+3) magic_enum
+   - Source path: lib/magic_enum.hpp
+   - License: MIT
+   - Reference: SPDX header in lib/magic_enum.hpp
+
+4) moodycamel::ConcurrentQueue
+   - Source path: lib/concurrentqueue.h
+   - License: Simplified BSD (dual-licensed with Boost Software License)
+   - Reference: license header in lib/concurrentqueue.h
+
+External build dependencies (manifest/toolchain)
+================================================
+
+1) Boost (system, throw_exception, asio, beast)
+   - Source: vcpkg/system packages
+   - License: Boost Software License 1.0
+   - Reference: upstream Boost distribution/package metadata
+
+Notes
+=====
+
+- This file is an inventory only and not legal advice.
+- Keep this file updated when adding/removing dependencies.

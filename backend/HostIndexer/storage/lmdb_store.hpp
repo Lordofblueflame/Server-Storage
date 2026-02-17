@@ -74,6 +74,19 @@ struct LmdbStoreOptions {
     bool write_map {false};
 };
 
+struct RetentionCleanupStats {
+    std::size_t snapshots_removed {0U};
+    std::size_t deltas_removed {0U};
+};
+
+struct StoreStats {
+    std::size_t snapshots_count {0U};
+    std::size_t deltas_count {0U};
+    std::size_t transport_outbox_count {0U};
+    std::size_t transport_consumers_count {0U};
+    std::uint64_t next_transport_sequence {0U};
+};
+
 class LmdbStore final {
 public:
     LmdbStore() = default;
@@ -91,6 +104,10 @@ public:
     [[nodiscard]] bool is_open() const noexcept;
 
     StoreStatus put_snapshot(const domain::Snapshot& snapshot, bool validate_before_store = true);
+    StoreStatus put_snapshot_with_transport(const domain::Snapshot& snapshot,
+                                            bool enqueue_transport = true,
+                                            bool validate_before_store = true,
+                                            std::uint64_t* out_transport_sequence = nullptr);
     StoreStatus get_snapshot(domain::SnapshotId snapshot_id,
                              domain::Snapshot& out_snapshot,
                              bool validate_after_read = true) const;
@@ -99,6 +116,13 @@ public:
                           const domain::Snapshot* base_snapshot = nullptr,
                           const domain::Snapshot* target_snapshot = nullptr,
                           bool validate_before_store = true);
+    StoreStatus put_snapshot_and_delta_with_transport(const domain::Snapshot& snapshot,
+                                                      const domain::DeltaSnapshot& delta,
+                                                      const domain::Snapshot* base_snapshot = nullptr,
+                                                      bool enqueue_transport = true,
+                                                      bool validate_before_store = true,
+                                                      std::uint64_t* out_snapshot_transport_sequence = nullptr,
+                                                      std::uint64_t* out_delta_transport_sequence = nullptr);
     StoreStatus get_delta(domain::SnapshotId base_snapshot_id,
                           domain::SnapshotId target_snapshot_id,
                           domain::DeltaSnapshot& out_delta,
@@ -112,6 +136,16 @@ public:
                               const domain::Snapshot* target_snapshot = nullptr,
                               bool validate_before_store = true,
                               std::uint64_t* out_sequence = nullptr);
+
+    StoreStatus register_transport_consumer(std::string_view consumer_id);
+    StoreStatus fetch_transport_batch_for_consumer(std::string_view consumer_id,
+                                                   std::size_t max_items,
+                                                   std::vector<TransportRecord>& out_records) const;
+    StoreStatus ack_transport_until_for_consumer(std::string_view consumer_id, std::uint64_t inclusive_sequence);
+    StoreStatus compact_transport_up_to_min_acked();
+    StoreStatus apply_snapshot_retention(std::size_t keep_latest_snapshots,
+                                         RetentionCleanupStats* out_stats = nullptr);
+    StoreStatus get_stats(StoreStats& out_stats) const;
 
     StoreStatus fetch_transport_batch(std::size_t max_items, std::vector<TransportRecord>& out_records) const;
     StoreStatus ack_transport_until(std::uint64_t inclusive_sequence);
@@ -138,10 +172,22 @@ private:
                                          const std::vector<std::uint8_t>& payload,
                                          std::uint64_t created_at,
                                          std::uint64_t* out_sequence);
+    StoreStatus enqueue_transport_record_in_txn(MDB_txn* write_txn,
+                                                TransportRecordType type,
+                                                std::string_view routing_key,
+                                                const std::vector<std::uint8_t>& payload,
+                                                std::uint64_t created_at,
+                                                std::uint64_t* out_sequence) const;
 
     StoreStatus reserve_next_sequence(MDB_txn* write_txn, std::uint64_t& out_sequence) const;
     StoreStatus read_next_sequence(MDB_txn* read_txn, std::uint64_t& out_sequence) const;
     StoreStatus write_next_sequence(MDB_txn* write_txn, std::uint64_t next_sequence) const;
+    StoreStatus read_consumer_ack_sequence(MDB_txn* txn,
+                                           std::string_view consumer_id,
+                                           std::uint64_t& out_sequence) const;
+    StoreStatus write_consumer_ack_sequence(MDB_txn* txn,
+                                            std::string_view consumer_id,
+                                            std::uint64_t sequence) const;
 
     mutable std::mutex writer_mutex_ {};
     MDB_env* env_ {nullptr};
@@ -149,6 +195,7 @@ private:
     MDB_dbi snapshots_dbi_ {0};
     MDB_dbi deltas_dbi_ {0};
     MDB_dbi transport_dbi_ {0};
+    MDB_dbi transport_consumers_dbi_ {0};
     bool open_ {false};
 };
 

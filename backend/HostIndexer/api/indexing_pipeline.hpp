@@ -29,7 +29,9 @@ struct PipelineResult {
 
     [[nodiscard]] bool ok() const noexcept {
         return snapshot_store_status.ok() &&
-               (!computed_delta.has_value() || delta_store_status.ok()) &&
+               delta_store_status.ok() &&
+               transport_snapshot_status.ok() &&
+               transport_delta_status.ok() &&
                snapshot_validation.ok() &&
                (!computed_delta.has_value() || delta_validation.ok());
     }
