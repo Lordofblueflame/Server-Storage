@@ -1,0 +1,5 @@
+build-localedge/
+build-hostindexer/
+**/build/
+**/cmake-build-*/
+.git/

@@ -1,0 +1,68 @@
+services:
+  hostindexer:
+    build:
+      context: .
+      dockerfile: HostIndexer/Dockerfile
+    command:
+      - /tmp/build-hostindexer/host_indexer_cli
+      - --serve
+      - --db
+      - /data/hostindex
+      - --listen-address
+      - 0.0.0.0
+      - --listen-port
+      - "9460"
+      - --ws-path
+      - /hostindexer
+      - --default-root
+      - /app/HostIndexer
+      - --io-threads
+      - "2"
+    environment:
+      HOSTINDEXER_ALLOWED_CLIENT_INSTANCE_ID: ${HOSTINDEXER_ALLOWED_CLIENT_INSTANCE_ID:-localedge-gateway-1}
+      HOSTINDEXER_BRIDGE_AUTH_TOKEN: ${HOSTINDEXER_BRIDGE_AUTH_TOKEN:?Set HOSTINDEXER_BRIDGE_AUTH_TOKEN in .env}
+    volumes:
+      - hostindexer_data:/data/hostindex
+    networks:
+      - backend_net
+
+  localedge:
+    build:
+      context: .
+      dockerfile: LocalEdgeServer/Dockerfile
+    depends_on:
+      - hostindexer
+    command:
+      - /tmp/build-localedge/localedge_server
+      - --host-id
+      - docker-host
+      - --client-instance-id
+      - ${HOSTINDEXER_ALLOWED_CLIENT_INSTANCE_ID:-localedge-gateway-1}
+      - --hostindexer-host
+      - hostindexer
+      - --hostindexer-port
+      - "9460"
+      - --hostindexer-path
+      - /hostindexer
+      - --api-address
+      - 0.0.0.0
+      - --api-port
+      - "9440"
+      - --poll-ms
+      - "200"
+    environment:
+      LOCALEDGE_JWT_SECRET: ${LOCALEDGE_JWT_SECRET:?Set LOCALEDGE_JWT_SECRET in .env}
+      LOCALEDGE_JWT_ISSUER: ${LOCALEDGE_JWT_ISSUER:-}
+      LOCALEDGE_JWT_AUDIENCE: ${LOCALEDGE_JWT_AUDIENCE:-}
+      HOSTINDEXER_BRIDGE_AUTH_TOKEN: ${HOSTINDEXER_BRIDGE_AUTH_TOKEN:?Set HOSTINDEXER_BRIDGE_AUTH_TOKEN in .env}
+    ports:
+      - "9440:9440"
+    networks:
+      - backend_net
+
+volumes:
+  hostindexer_data:
+
+networks:
+  backend_net:
+    driver: bridge
