@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -38,9 +39,15 @@ struct FrontendApiServerOptions {
     std::string openapi_path {"/api/v1/openapi.json"};
     std::string docs_path {"/api/v1/docs"};
     std::string realtime_tree_path {"/api/v1/realtime/tree"};
+    std::string realtime_snapshot_path {"/api/v1/realtime/snapshot"};
     std::string file_download_path {"/api/v1/files/download"};
     std::string file_upload_path {"/api/v1/files/upload"};
     std::string directory_upload_path {"/api/v1/files/upload-directory"};
+    std::filesystem::path allowed_read_root {};
+    std::filesystem::path allowed_write_root {};
+    std::size_t max_upload_file_bytes {16U * 1024U * 1024U};
+    std::size_t max_upload_directory_files {1024U};
+    std::size_t max_upload_total_decoded_bytes {64U * 1024U * 1024U};
     std::size_t directory_upload_threads {4U};
 
     bool require_jwt {true};
@@ -62,13 +69,17 @@ struct FrontendApiServerOptions {
 using CommandHandler = std::function<common::Status(const backend::shared::crud::CrudCommandMessage&)>;
 using RealtimeTreeHandler = std::function<common::StatusOr<nlohmann::json>(std::string_view host_id,
                                                                             std::string_view path)>;
+using RealtimeSnapshotHandler = std::function<common::StatusOr<nlohmann::json>(std::string_view host_id,
+                                                                                std::string_view path,
+                                                                                bool include_entries)>;
 
 class FrontendApiServer final {
 public:
     FrontendApiServer(boost::asio::io_context& io_context,
                       FrontendApiServerOptions options,
                       CommandHandler command_handler,
-                      RealtimeTreeHandler realtime_tree_handler = {});
+                      RealtimeTreeHandler realtime_tree_handler = {},
+                      RealtimeSnapshotHandler realtime_snapshot_handler = {});
 
     common::Status start();
     void stop();
@@ -84,6 +95,7 @@ private:
     FrontendApiServerOptions options_ {};
     CommandHandler command_handler_ {};
     RealtimeTreeHandler realtime_tree_handler_ {};
+    RealtimeSnapshotHandler realtime_snapshot_handler_ {};
     std::shared_ptr<FrontendApiSharedState> shared_state_ {};
     std::atomic<bool> running_ {false};
 };

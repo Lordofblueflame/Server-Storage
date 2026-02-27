@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: backend/LocalEdgeServer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-clang-release
+            os: ubuntu-latest
+            configure_preset: ci-linux-clang-release
+            build_preset: ci-linux-clang-release
+            test_preset: ci-linux-clang-release
+          - name: windows-msvc-release
+            os: windows-latest
+            configure_preset: ci-windows-msvc-release
+            build_preset: ci-windows-msvc-release
+            test_preset: ci-windows-msvc-release
+
+    env:
+      VCPKG_FEATURE_FLAGS: manifests,binarycaching
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Setup vcpkg (manifest mode)
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: '**/backend/LocalEdgeServer/vcpkg.json'
+          runVcpkgInstall: true
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.configure_preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build_preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.test_preset }} --output-on-failure

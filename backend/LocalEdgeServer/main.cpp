@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -78,6 +79,45 @@ std::string entry_type_text(const host_indexer::domain::EntryType type) {
     return "special";
 }
 
+std::optional<std::uint64_t> parse_u64_arg(const std::string_view flag, const std::string& value) {
+    try {
+        std::size_t parsed_chars = 0;
+        const auto parsed = std::stoull(value, &parsed_chars, 10);
+        if (parsed_chars != value.size()) {
+            std::cerr << "Invalid numeric value for " << flag << ": " << value << '\n';
+            return std::nullopt;
+        }
+        return static_cast<std::uint64_t>(parsed);
+    } catch (const std::exception&) {
+        std::cerr << "Invalid numeric value for " << flag << ": " << value << '\n';
+        return std::nullopt;
+    }
+}
+
+std::optional<std::uint16_t> parse_u16_arg(const std::string_view flag, const std::string& value) {
+    const auto parsed = parse_u64_arg(flag, value);
+    if (!parsed.has_value()) {
+        return std::nullopt;
+    }
+    if (*parsed > static_cast<std::uint64_t>(std::numeric_limits<std::uint16_t>::max())) {
+        std::cerr << "Value out of range for " << flag << ": " << value << '\n';
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(*parsed);
+}
+
+std::optional<std::size_t> parse_size_arg(const std::string_view flag, const std::string& value) {
+    const auto parsed = parse_u64_arg(flag, value);
+    if (!parsed.has_value()) {
+        return std::nullopt;
+    }
+    if (*parsed > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        std::cerr << "Value out of range for " << flag << ": " << value << '\n';
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(*parsed);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -93,6 +133,32 @@ int main(int argc, char** argv) {
         bridge_token != nullptr && bridge_token[0] != '\0') {
         hostindexer_options.auth_token = bridge_token;
     }
+    if (const char* reconnect_max_ms = std::getenv("LOCALEDGE_RECONNECT_MAX_MS");
+        reconnect_max_ms != nullptr && reconnect_max_ms[0] != '\0') {
+        const auto parsed = parse_u64_arg("LOCALEDGE_RECONNECT_MAX_MS", reconnect_max_ms);
+        if (!parsed.has_value()) {
+            return 1;
+        }
+        hostindexer_options.reconnect_max_delay = std::chrono::milliseconds(*parsed);
+    }
+    if (const char* reconnect_backoff_factor = std::getenv("LOCALEDGE_RECONNECT_BACKOFF_FACTOR");
+        reconnect_backoff_factor != nullptr && reconnect_backoff_factor[0] != '\0') {
+        const auto parsed = parse_u64_arg("LOCALEDGE_RECONNECT_BACKOFF_FACTOR", reconnect_backoff_factor);
+        if (!parsed.has_value() || *parsed > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+            std::cerr << "Invalid value for LOCALEDGE_RECONNECT_BACKOFF_FACTOR\n";
+            return 1;
+        }
+        hostindexer_options.reconnect_backoff_factor = static_cast<std::uint32_t>(*parsed);
+    }
+    if (const char* reconnect_jitter_percent = std::getenv("LOCALEDGE_RECONNECT_JITTER_PERCENT");
+        reconnect_jitter_percent != nullptr && reconnect_jitter_percent[0] != '\0') {
+        const auto parsed = parse_u64_arg("LOCALEDGE_RECONNECT_JITTER_PERCENT", reconnect_jitter_percent);
+        if (!parsed.has_value() || *parsed > 100U) {
+            std::cerr << "Invalid value for LOCALEDGE_RECONNECT_JITTER_PERCENT (expected 0-100)\n";
+            return 1;
+        }
+        hostindexer_options.reconnect_jitter_percent = static_cast<std::uint32_t>(*parsed);
+    }
 
     localedge::api::FrontendApiServerOptions api_options;
     if (const char* secret = std::getenv("LOCALEDGE_JWT_SECRET"); secret != nullptr && secret[0] != '\0') {
@@ -103,6 +169,38 @@ int main(int argc, char** argv) {
     }
     if (const char* audience = std::getenv("LOCALEDGE_JWT_AUDIENCE"); audience != nullptr && audience[0] != '\0') {
         api_options.jwt_audience = audience;
+    }
+    if (const char* allowed_read_root = std::getenv("LOCALEDGE_ALLOWED_READ_ROOT");
+        allowed_read_root != nullptr && allowed_read_root[0] != '\0') {
+        api_options.allowed_read_root = allowed_read_root;
+    }
+    if (const char* allowed_write_root = std::getenv("LOCALEDGE_ALLOWED_WRITE_ROOT");
+        allowed_write_root != nullptr && allowed_write_root[0] != '\0') {
+        api_options.allowed_write_root = allowed_write_root;
+    }
+    if (const char* max_upload_file_bytes = std::getenv("LOCALEDGE_MAX_UPLOAD_FILE_BYTES");
+        max_upload_file_bytes != nullptr && max_upload_file_bytes[0] != '\0') {
+        const auto parsed = parse_size_arg("LOCALEDGE_MAX_UPLOAD_FILE_BYTES", max_upload_file_bytes);
+        if (!parsed.has_value()) {
+            return 1;
+        }
+        api_options.max_upload_file_bytes = *parsed;
+    }
+    if (const char* max_upload_directory_files = std::getenv("LOCALEDGE_MAX_UPLOAD_DIRECTORY_FILES");
+        max_upload_directory_files != nullptr && max_upload_directory_files[0] != '\0') {
+        const auto parsed = parse_size_arg("LOCALEDGE_MAX_UPLOAD_DIRECTORY_FILES", max_upload_directory_files);
+        if (!parsed.has_value()) {
+            return 1;
+        }
+        api_options.max_upload_directory_files = *parsed;
+    }
+    if (const char* max_upload_total_bytes = std::getenv("LOCALEDGE_MAX_UPLOAD_TOTAL_DECODED_BYTES");
+        max_upload_total_bytes != nullptr && max_upload_total_bytes[0] != '\0') {
+        const auto parsed = parse_size_arg("LOCALEDGE_MAX_UPLOAD_TOTAL_DECODED_BYTES", max_upload_total_bytes);
+        if (!parsed.has_value()) {
+            return 1;
+        }
+        api_options.max_upload_total_decoded_bytes = *parsed;
     }
 
     bool start_hostindexer_client = true;
@@ -122,7 +220,11 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
-            io_threads = std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value)));
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            io_threads = std::max<std::size_t>(1U, *parsed);
         } else if (arg == "--disable-hostindexer-client") {
             start_hostindexer_client = false;
         } else if (arg == "--host-id") {
@@ -148,7 +250,11 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
-            hostindexer_options.remote_port = static_cast<std::uint16_t>(std::stoul(*value));
+            const auto parsed = parse_u16_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            hostindexer_options.remote_port = *parsed;
         } else if (arg == "--hostindexer-path") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
@@ -166,26 +272,74 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
-            hostindexer_options.idle_pull_interval = std::chrono::milliseconds(std::stoll(*value));
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            hostindexer_options.idle_pull_interval = std::chrono::milliseconds(*parsed);
         } else if (arg == "--hot-poll-ms") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
-            hostindexer_options.hot_pull_interval = std::chrono::milliseconds(std::stoll(*value));
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            hostindexer_options.hot_pull_interval = std::chrono::milliseconds(*parsed);
         } else if (arg == "--reconnect-ms") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
-            hostindexer_options.reconnect_delay = std::chrono::milliseconds(std::stoll(*value));
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            hostindexer_options.reconnect_delay = std::chrono::milliseconds(*parsed);
+        } else if (arg == "--reconnect-max-ms") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            hostindexer_options.reconnect_max_delay = std::chrono::milliseconds(*parsed);
+        } else if (arg == "--reconnect-backoff-factor") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value() || *parsed > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+                std::cerr << "Invalid value for " << arg << '\n';
+                return 1;
+            }
+            hostindexer_options.reconnect_backoff_factor = static_cast<std::uint32_t>(*parsed);
+        } else if (arg == "--reconnect-jitter-percent") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value() || *parsed > 100U) {
+                std::cerr << "Invalid value for " << arg << " (expected 0-100)\n";
+                return 1;
+            }
+            hostindexer_options.reconnect_jitter_percent = static_cast<std::uint32_t>(*parsed);
         } else if (arg == "--outbox-batch") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
             hostindexer_options.outbox_batch_size =
-                std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value)));
+                std::max<std::size_t>(1U, *parsed);
         } else if (arg == "--disable-auto-pull") {
             hostindexer_options.auto_pull_enabled = false;
         } else if (arg == "--api-address") {
@@ -199,7 +353,11 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
-            api_options.port = static_cast<std::uint16_t>(std::stoul(*value));
+            const auto parsed = parse_u16_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            api_options.port = *parsed;
         } else if (arg == "--api-health-path") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
@@ -236,6 +394,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
             api_options.realtime_tree_path = *value;
+        } else if (arg == "--api-realtime-snapshot-path") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            api_options.realtime_snapshot_path = *value;
         } else if (arg == "--api-file-download-path") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
@@ -254,13 +418,59 @@ int main(int argc, char** argv) {
                 return 1;
             }
             api_options.directory_upload_path = *value;
+        } else if (arg == "--allowed-read-root") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            api_options.allowed_read_root = *value;
+        } else if (arg == "--allowed-write-root") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            api_options.allowed_write_root = *value;
         } else if (arg == "--directory-upload-threads") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
             api_options.directory_upload_threads =
-                std::min<std::size_t>(4U, std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value))));
+                std::min<std::size_t>(4U, std::max<std::size_t>(1U, *parsed));
+        } else if (arg == "--max-upload-file-bytes") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            api_options.max_upload_file_bytes = *parsed;
+        } else if (arg == "--max-upload-directory-files") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            api_options.max_upload_directory_files = *parsed;
+        } else if (arg == "--max-upload-total-decoded-bytes") {
+            const auto value = require_next(arg);
+            if (!value.has_value()) {
+                return 1;
+            }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            api_options.max_upload_total_decoded_bytes = *parsed;
         } else if (arg == "--disable-jwt") {
             api_options.require_jwt = false;
         } else if (arg == "--enable-jwt") {
@@ -288,8 +498,11 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
-            api_options.jwt_clock_skew_seconds =
-                static_cast<std::uint64_t>(std::stoull(*value));
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            api_options.jwt_clock_skew_seconds = *parsed;
         } else if (arg == "--jwt-no-exp-required") {
             api_options.jwt_require_exp_claim = false;
         } else if (arg == "--jwt-exp-required") {
@@ -299,15 +512,23 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
             api_options.ws_max_pending_messages =
-                std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value)));
+                std::max<std::size_t>(1U, *parsed);
         } else if (arg == "--ws-max-pending-bytes") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
             api_options.ws_max_pending_bytes =
-                std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value)));
+                std::max<std::size_t>(1U, *parsed);
         } else if (arg == "--ws-backpressure-policy") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
@@ -324,21 +545,33 @@ int main(int argc, char** argv) {
             if (!value.has_value()) {
                 return 1;
             }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
             api_options.command_worker_threads =
-                std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value)));
+                std::max<std::size_t>(1U, *parsed);
         } else if (arg == "--command-max-queue-per-worker") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
+            const auto parsed = parse_size_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
             api_options.command_max_queue_per_worker =
-                std::max<std::size_t>(1U, static_cast<std::size_t>(std::stoull(*value)));
+                std::max<std::size_t>(1U, *parsed);
         } else if (arg == "--command-timeout-ms") {
             const auto value = require_next(arg);
             if (!value.has_value()) {
                 return 1;
             }
-            api_options.command_execution_timeout = std::chrono::milliseconds(std::stoll(*value));
+            const auto parsed = parse_u64_arg(arg, *value);
+            if (!parsed.has_value()) {
+                return 1;
+            }
+            api_options.command_execution_timeout = std::chrono::milliseconds(*parsed);
         }
     }
 
@@ -416,7 +649,17 @@ int main(int argc, char** argv) {
             host_id = latest_host.value;
         }
 
-        const std::string path = requested_path.empty() ? "/" : std::string(requested_path);
+        std::string path = std::string(requested_path);
+        if (path.empty()) {
+            const auto resolved_root = materializer_sink.root_path(host_id);
+            if (!resolved_root.ok()) {
+                return localedge::common::StatusOr<nlohmann::json>::failure(
+                    resolved_root.status.code,
+                    resolved_root.status.message
+                );
+            }
+            path = resolved_root.value;
+        }
         const auto children = materializer_sink.list_children(host_id, path);
         if (!children.ok()) {
             return localedge::common::StatusOr<nlohmann::json>::failure(
@@ -460,6 +703,100 @@ int main(int argc, char** argv) {
         return localedge::common::StatusOr<nlohmann::json>::success(std::move(response));
     };
 
+    localedge::api::RealtimeSnapshotHandler realtime_snapshot_handler = [&materializer_sink](
+                                                                            const std::string_view requested_host,
+                                                                            const std::string_view requested_path,
+                                                                            const bool include_entries)
+        -> localedge::common::StatusOr<nlohmann::json> {
+        std::string host_id(requested_host);
+        if (host_id.empty()) {
+            const auto latest_host = materializer_sink.latest_host_id();
+            if (!latest_host.ok()) {
+                return localedge::common::StatusOr<nlohmann::json>::failure(
+                    latest_host.status.code,
+                    latest_host.status.message
+                );
+            }
+            host_id = latest_host.value;
+        }
+
+        const auto snapshot_id = materializer_sink.last_snapshot_id(host_id);
+        if (!snapshot_id.ok()) {
+            return localedge::common::StatusOr<nlohmann::json>::failure(
+                snapshot_id.status.code,
+                snapshot_id.status.message
+            );
+        }
+
+        const auto last_sequence = materializer_sink.last_sequence(host_id);
+        if (!last_sequence.ok()) {
+            return localedge::common::StatusOr<nlohmann::json>::failure(
+                last_sequence.status.code,
+                last_sequence.status.message
+            );
+        }
+
+        const auto entry_count = materializer_sink.entry_count(host_id);
+        if (!entry_count.ok()) {
+            return localedge::common::StatusOr<nlohmann::json>::failure(
+                entry_count.status.code,
+                entry_count.status.message
+            );
+        }
+
+        std::string path = std::string(requested_path);
+        if (path.empty()) {
+            const auto resolved_root = materializer_sink.root_path(host_id);
+            if (!resolved_root.ok()) {
+                return localedge::common::StatusOr<nlohmann::json>::failure(
+                    resolved_root.status.code,
+                    resolved_root.status.message
+                );
+            }
+            path = resolved_root.value;
+        }
+
+        nlohmann::json response = nlohmann::json::object();
+        response["ok"] = true;
+        response["host_id"] = host_id;
+        response["snapshot_id"] = snapshot_id.value;
+        response["last_sequence"] = last_sequence.value;
+        response["entry_count"] = entry_count.value;
+        response["path"] = path;
+        response["include_entries"] = include_entries;
+
+        if (include_entries) {
+            const auto children = materializer_sink.list_children(host_id, path);
+            if (!children.ok()) {
+                return localedge::common::StatusOr<nlohmann::json>::failure(
+                    children.status.code,
+                    children.status.message
+                );
+            }
+
+            nlohmann::json entries = nlohmann::json::array();
+            for (const auto& entry : children.value) {
+                entries.push_back(
+                    {
+                        {"id", entry.id},
+                        {"parent_id", entry.parent_id},
+                        {"path", entry.normalized_path},
+                        {"name", entry.name},
+                        {"type", entry_type_text(entry.type)},
+                        {"size_bytes", entry.metadata.size_bytes},
+                        {"created_at", entry.metadata.created_at},
+                        {"modified_at", entry.metadata.modified_at},
+                        {"accessed_at", entry.metadata.accessed_at},
+                        {"permissions", entry.metadata.permissions}
+                    }
+                );
+            }
+            response["entries"] = std::move(entries);
+        }
+
+        return localedge::common::StatusOr<nlohmann::json>::success(std::move(response));
+    };
+
     auto on_connection_state = [](const bool connected, const std::string_view message) {
         std::cout << "[hostindexer] connected=" << (connected ? "true" : "false")
                   << " state=" << message << '\n';
@@ -490,7 +827,8 @@ int main(int argc, char** argv) {
         io_context,
         api_options,
         std::move(command_handler),
-        std::move(realtime_tree_handler)
+        std::move(realtime_tree_handler),
+        std::move(realtime_snapshot_handler)
     );
 
     const auto api_start = api_server->start();
@@ -525,10 +863,20 @@ int main(int argc, char** argv) {
     std::cout << "  openapi_path=" << api_options.openapi_path << '\n';
     std::cout << "  docs_path=" << api_options.docs_path << '\n';
     std::cout << "  realtime_tree_path=" << api_options.realtime_tree_path << '\n';
+    std::cout << "  realtime_snapshot_path=" << api_options.realtime_snapshot_path << '\n';
     std::cout << "  file_download_path=" << api_options.file_download_path << '\n';
     std::cout << "  file_upload_path=" << api_options.file_upload_path << '\n';
     std::cout << "  directory_upload_path=" << api_options.directory_upload_path << '\n';
+    std::cout << "  allowed_read_root="
+              << (api_options.allowed_read_root.empty() ? "<unrestricted>" : api_options.allowed_read_root.string())
+              << '\n';
+    std::cout << "  allowed_write_root="
+              << (api_options.allowed_write_root.empty() ? "<unrestricted>" : api_options.allowed_write_root.string())
+              << '\n';
     std::cout << "  directory_upload_threads=" << api_options.directory_upload_threads << '\n';
+    std::cout << "  max_upload_file_bytes=" << api_options.max_upload_file_bytes << '\n';
+    std::cout << "  max_upload_directory_files=" << api_options.max_upload_directory_files << '\n';
+    std::cout << "  max_upload_total_decoded_bytes=" << api_options.max_upload_total_decoded_bytes << '\n';
     std::cout << "  jwt_required=" << (api_options.require_jwt ? "true" : "false") << '\n';
     std::cout << "  ws_backpressure=" << backpressure_policy_to_text(api_options.ws_backpressure_policy) << '\n';
     std::cout << "  ws_max_pending_messages=" << api_options.ws_max_pending_messages << '\n';
@@ -545,6 +893,10 @@ int main(int argc, char** argv) {
         std::cout << "  bridge_auth_token_configured="
                   << (hostindexer_options.auth_token.empty() ? "false" : "true") << '\n';
         std::cout << "  auto_pull=" << (hostindexer_options.auto_pull_enabled ? "true" : "false") << '\n';
+        std::cout << "  reconnect_delay_ms=" << hostindexer_options.reconnect_delay.count() << '\n';
+        std::cout << "  reconnect_max_delay_ms=" << hostindexer_options.reconnect_max_delay.count() << '\n';
+        std::cout << "  reconnect_backoff_factor=" << hostindexer_options.reconnect_backoff_factor << '\n';
+        std::cout << "  reconnect_jitter_percent=" << hostindexer_options.reconnect_jitter_percent << '\n';
     }
 
     while (!g_stop_requested.load()) {

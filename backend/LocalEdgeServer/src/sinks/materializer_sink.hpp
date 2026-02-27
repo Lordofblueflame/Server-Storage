@@ -31,7 +31,9 @@ public:
     common::Status flush() override;
 
     common::StatusOr<std::string> latest_host_id() const;
+    common::StatusOr<std::string> root_path(std::string_view host_id) const;
     common::StatusOr<std::uint64_t> last_snapshot_id(std::string_view host_id) const;
+    common::StatusOr<std::uint64_t> last_sequence(std::string_view host_id) const;
     common::StatusOr<std::vector<host_indexer::domain::FileEntry>> list_children(std::string_view host_id,
                                                                                   std::string_view parent_path) const;
     common::StatusOr<std::size_t> entry_count(std::string_view host_id) const;

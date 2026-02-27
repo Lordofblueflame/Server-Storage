@@ -1,6 +1,7 @@
 #include "hostindexer_client.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <iostream>
 #include <sstream>
 #include <utility>
@@ -36,6 +37,18 @@ HostIndexerWebSocketClient::HostIndexerWebSocketClient(boost::asio::io_context& 
       options_(std::move(options)),
       on_result_(std::move(on_result)),
       on_connection_state_(std::move(on_connection_state)) {
+    if (options_.reconnect_delay.count() <= 0) {
+        options_.reconnect_delay = std::chrono::milliseconds(250);
+    }
+    if (options_.reconnect_max_delay < options_.reconnect_delay) {
+        options_.reconnect_max_delay = options_.reconnect_delay;
+    }
+    if (options_.reconnect_backoff_factor < 1U) {
+        options_.reconnect_backoff_factor = 1U;
+    }
+    if (options_.reconnect_jitter_percent > 100U) {
+        options_.reconnect_jitter_percent = 100U;
+    }
 }
 
 void HostIndexerWebSocketClient::start() {
@@ -45,12 +58,20 @@ void HostIndexerWebSocketClient::start() {
     running_ = true;
     request_sequence_ = 0U;
     last_ack_sequence_ = 0U;
+    reconnect_attempt_ = 0U;
+    reconnect_events_total_ = 0U;
+    reconnect_recoveries_total_ = 0U;
+    reconnect_reason_counts_.clear();
     {
         std::ostringstream text;
         text << "starting websocket bridge to " << options_.remote_host << ':' << options_.remote_port
              << options_.websocket_path
              << " host_id=" << options_.host_id
-             << " auto_pull=" << (options_.auto_pull_enabled ? "true" : "false");
+             << " auto_pull=" << (options_.auto_pull_enabled ? "true" : "false")
+             << " reconnect_delay_ms=" << options_.reconnect_delay.count()
+             << " reconnect_max_delay_ms=" << options_.reconnect_max_delay.count()
+             << " reconnect_backoff_factor=" << options_.reconnect_backoff_factor
+             << " reconnect_jitter_percent=" << options_.reconnect_jitter_percent;
         log_bridge(text.str());
     }
     start_connect();
@@ -75,6 +96,24 @@ void HostIndexerWebSocketClient::stop() {
         websocket_.reset();
     }
 
+    {
+        std::ostringstream text;
+        text << "bridge telemetry reconnect_events_total=" << reconnect_events_total_
+             << " reconnect_recoveries_total=" << reconnect_recoveries_total_;
+        if (!reconnect_reason_counts_.empty()) {
+            text << " reasons=[";
+            bool first = true;
+            for (const auto& [reason, count] : reconnect_reason_counts_) {
+                if (!first) {
+                    text << ',';
+                }
+                first = false;
+                text << reason << ':' << count;
+            }
+            text << ']';
+        }
+        log_bridge(text.str());
+    }
     log_bridge("bridge stopped");
 }
 
@@ -270,6 +309,13 @@ void HostIndexerWebSocketClient::handle_message(const std::string_view payload) 
         }
 
         hello_complete_ = true;
+        if (reconnect_attempt_ > 0U) {
+            ++reconnect_recoveries_total_;
+            std::ostringstream recovery;
+            recovery << "reconnected after attempts=" << reconnect_attempt_;
+            log_bridge(recovery.str());
+        }
+        reconnect_attempt_ = 0U;
         log_bridge("hello acknowledged by hostindexer");
         notify_connection_state(true, "connected");
         flush_pending_commands();
@@ -321,10 +367,15 @@ void HostIndexerWebSocketClient::schedule_reconnect(const std::string_view reaso
 
     handshake_complete_ = false;
     hello_complete_ = false;
+    ++reconnect_events_total_;
+    reconnect_reason_counts_[std::string(reason)] += 1U;
+    ++reconnect_attempt_;
+    const auto delay = compute_reconnect_delay();
     {
         std::ostringstream text;
         text << "scheduling reconnect reason=" << reason
-             << " delay_ms=" << options_.reconnect_delay.count();
+             << " attempt=" << reconnect_attempt_
+             << " delay_ms=" << delay.count();
         log_bridge(text.str());
     }
     notify_connection_state(false, reason);
@@ -340,13 +391,63 @@ void HostIndexerWebSocketClient::schedule_reconnect(const std::string_view reaso
     }
 
     reconnect_timer_.cancel(ignored);
-    reconnect_timer_.expires_after(options_.reconnect_delay);
+    reconnect_timer_.expires_after(delay);
     reconnect_timer_.async_wait([self = shared_from_this()](const boost::system::error_code& error) {
         if (error || !self->running_) {
             return;
         }
         self->start_connect();
     });
+}
+
+std::chrono::milliseconds HostIndexerWebSocketClient::compute_reconnect_delay() const {
+    std::uint64_t delay_ms = static_cast<std::uint64_t>(std::max<std::int64_t>(
+        1LL,
+        options_.reconnect_delay.count()
+    ));
+    const std::uint64_t max_delay_ms = static_cast<std::uint64_t>(std::max<std::int64_t>(
+        static_cast<std::int64_t>(delay_ms),
+        options_.reconnect_max_delay.count()
+    ));
+
+    for (std::uint32_t i = 1U; i < reconnect_attempt_; ++i) {
+        if (options_.reconnect_backoff_factor <= 1U) {
+            break;
+        }
+        if (delay_ms >= max_delay_ms) {
+            delay_ms = max_delay_ms;
+            break;
+        }
+        if (delay_ms > std::numeric_limits<std::uint64_t>::max() / options_.reconnect_backoff_factor) {
+            delay_ms = max_delay_ms;
+            break;
+        }
+        delay_ms *= static_cast<std::uint64_t>(options_.reconnect_backoff_factor);
+        if (delay_ms > max_delay_ms) {
+            delay_ms = max_delay_ms;
+            break;
+        }
+    }
+
+    if (options_.reconnect_jitter_percent == 0U || delay_ms == 0U) {
+        return std::chrono::milliseconds(delay_ms);
+    }
+
+    const std::uint64_t jitter_span = (delay_ms * options_.reconnect_jitter_percent) / 100U;
+    if (jitter_span == 0U) {
+        return std::chrono::milliseconds(delay_ms);
+    }
+
+    std::uniform_int_distribution<std::int64_t> distribution(
+        -static_cast<std::int64_t>(jitter_span),
+        static_cast<std::int64_t>(jitter_span)
+    );
+    const auto jitter = distribution(rng_);
+    const auto jittered = static_cast<std::int64_t>(delay_ms) + jitter;
+    if (jittered <= 0) {
+        return std::chrono::milliseconds(1);
+    }
+    return std::chrono::milliseconds(static_cast<std::uint64_t>(jittered));
 }
 
 void HostIndexerWebSocketClient::flush_pending_commands() {

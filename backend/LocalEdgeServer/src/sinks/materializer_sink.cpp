@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iterator>
+#include <limits>
 
 namespace localedge::sinks {
 namespace {
@@ -178,6 +180,54 @@ common::StatusOr<std::string> MaterializerSink::latest_host_id() const {
     return common::StatusOr<std::string>::success(last_updated_host_id_);
 }
 
+common::StatusOr<std::string> MaterializerSink::root_path(const std::string_view host_id) const {
+    if (host_id.empty()) {
+        return common::StatusOr<std::string>::failure(common::ErrorCode::InvalidArgument, "Host id is empty.");
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto state_it = states_.find(std::string(host_id));
+    if (state_it == states_.end()) {
+        return common::StatusOr<std::string>::failure(common::ErrorCode::NotFound, "Host state not found.");
+    }
+
+    const auto& state = state_it->second;
+    auto candidate_root = std::string {};
+    auto candidate_depth = std::numeric_limits<std::size_t>::max();
+    for (const auto& [entry_id, entry] : state.entries_by_id) {
+        (void)entry_id;
+        if (entry.type != host_indexer::domain::EntryType::Directory || entry.normalized_path.empty()) {
+            continue;
+        }
+
+        bool is_root_like = entry.parent_id == 0U;
+        if (!is_root_like) {
+            const auto parent = parent_from_path(entry.normalized_path);
+            is_root_like = parent.empty() || !state.id_by_path.contains(parent);
+        }
+        if (!is_root_like) {
+            continue;
+        }
+
+        const auto depth = std::filesystem::path(entry.normalized_path).begin() ==
+                           std::filesystem::path(entry.normalized_path).end()
+            ? std::size_t(0U)
+            : static_cast<std::size_t>(std::distance(
+                  std::filesystem::path(entry.normalized_path).begin(),
+                  std::filesystem::path(entry.normalized_path).end()));
+        if (depth < candidate_depth) {
+            candidate_depth = depth;
+            candidate_root = entry.normalized_path;
+        }
+    }
+
+    if (!candidate_root.empty()) {
+        return common::StatusOr<std::string>::success(candidate_root);
+    }
+
+    return common::StatusOr<std::string>::failure(common::ErrorCode::NotFound, "Root path not found.");
+}
+
 common::StatusOr<std::uint64_t> MaterializerSink::last_snapshot_id(const std::string_view host_id) const {
     if (host_id.empty()) {
         return common::StatusOr<std::uint64_t>::failure(common::ErrorCode::InvalidArgument, "Host id is empty.");
@@ -191,6 +241,19 @@ common::StatusOr<std::uint64_t> MaterializerSink::last_snapshot_id(const std::st
     return common::StatusOr<std::uint64_t>::success(it->second.last_snapshot_id);
 }
 
+common::StatusOr<std::uint64_t> MaterializerSink::last_sequence(const std::string_view host_id) const {
+    if (host_id.empty()) {
+        return common::StatusOr<std::uint64_t>::failure(common::ErrorCode::InvalidArgument, "Host id is empty.");
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = states_.find(std::string(host_id));
+    if (it == states_.end()) {
+        return common::StatusOr<std::uint64_t>::failure(common::ErrorCode::NotFound, "Host state not found.");
+    }
+    return common::StatusOr<std::uint64_t>::success(it->second.last_sequence);
+}
+
 common::StatusOr<std::vector<host_indexer::domain::FileEntry>> MaterializerSink::list_children(
     const std::string_view host_id,
     const std::string_view parent_path) const {
@@ -201,7 +264,9 @@ common::StatusOr<std::vector<host_indexer::domain::FileEntry>> MaterializerSink:
         );
     }
 
-    const std::string normalized_parent = parent_path.empty() ? "/" : std::string(parent_path);
+    const std::string normalized_parent = parent_path.empty()
+        ? "/"
+        : normalize_path_lexical(parent_path);
     std::lock_guard<std::mutex> lock(mutex_);
     const auto state_it = states_.find(std::string(host_id));
     if (state_it == states_.end()) {

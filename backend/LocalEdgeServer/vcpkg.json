@@ -1,0 +1,12 @@
+{
+  "name": "localedgeserver",
+  "version-string": "0.2.0",
+  "description": "Stateless gateway API and websocket bridge for HostIndexer.",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "boost-system",
+    "boost-throw-exception",
+    "openssl"
+  ]
+}

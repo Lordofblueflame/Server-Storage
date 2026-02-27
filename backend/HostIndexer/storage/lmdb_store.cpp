@@ -57,8 +57,8 @@ DeltaKey make_delta_key(const domain::SnapshotId base_snapshot_id,
     DeltaKey key {};
     const auto base_encoded = encode_u64_be(base_snapshot_id);
     const auto target_encoded = encode_u64_be(target_snapshot_id);
-    std::copy(base_encoded.begin(), base_encoded.end(), key.bytes.begin());
-    std::copy(target_encoded.begin(), target_encoded.end(), key.bytes.begin() + 8);
+    std::ranges::copy(base_encoded, key.bytes.begin());
+    std::ranges::copy(target_encoded.begin(), target_encoded.end(), key.bytes.begin() + 8);
     return key;
 }
 

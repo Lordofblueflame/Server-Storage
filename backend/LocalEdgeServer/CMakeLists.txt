@@ -24,7 +24,12 @@ set(LOCALEDGE_GATEWAY_SOURCES
     src/api/frontend_dto.cpp
     src/api/jwt_auth.cpp
     src/api/command_load_balancer.cpp
+    src/ingest/ingest_coordinator.cpp
     src/ingest/message_validator.cpp
+    src/protocol/hostindexer_frame.cpp
+    src/protocol/wire.cpp
+    src/storage/in_memory_ingest_store.cpp
+    src/observability/metrics.cpp
     src/sinks/materializer_sink.cpp
     ${HOST_INDEXER_CODEC_SOURCES}
 )
@@ -43,14 +48,31 @@ target_link_libraries(localedge_gateway
     Threads::Threads
     OpenSSL::Crypto
 )
+if (TARGET Boost::throw_exception)
+    target_link_libraries(localedge_gateway PUBLIC Boost::throw_exception)
+endif()
 
 add_executable(localedge_server main.cpp)
 target_link_libraries(localedge_server PRIVATE localedge_gateway)
 
+add_executable(localedge_server_tests
+    tests/test_main.cpp
+    tests/protocol_wire_tests.cpp
+    tests/hostindexer_frame_tests.cpp
+    tests/ingest_coordinator_tests.cpp
+    tests/hostindexer_client_integration_tests.cpp
+)
+target_link_libraries(localedge_server_tests PRIVATE localedge_gateway)
+
+enable_testing()
+add_test(NAME localedge_server_tests COMMAND localedge_server_tests)
+
 if (MSVC)
     target_compile_options(localedge_gateway PRIVATE /W4)
     target_compile_options(localedge_server PRIVATE /W4)
+    target_compile_options(localedge_server_tests PRIVATE /W4)
 else()
     target_compile_options(localedge_gateway PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(localedge_server PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(localedge_server_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()

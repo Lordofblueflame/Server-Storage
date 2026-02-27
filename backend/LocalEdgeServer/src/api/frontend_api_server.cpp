@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -166,6 +167,71 @@ bool has_parent_traversal(const std::filesystem::path& path) {
     return false;
 }
 
+bool path_component_equals(std::string lhs, std::string rhs) {
+#ifdef _WIN32
+    std::transform(lhs.begin(), lhs.end(), lhs.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    std::transform(rhs.begin(), rhs.end(), rhs.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+#endif
+    return lhs == rhs;
+}
+
+bool is_path_within_root(const std::filesystem::path& candidate, const std::filesystem::path& root) {
+    auto root_it = root.begin();
+    auto root_end = root.end();
+    auto candidate_it = candidate.begin();
+    auto candidate_end = candidate.end();
+
+    for (; root_it != root_end; ++root_it, ++candidate_it) {
+        if (candidate_it == candidate_end) {
+            return false;
+        }
+        if (!path_component_equals(root_it->string(), candidate_it->string())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<std::filesystem::path> canonicalize_existing_path(const std::filesystem::path& path) {
+    std::error_code fs_error;
+    const auto canonical = std::filesystem::canonical(path, fs_error);
+    if (fs_error) {
+        return std::nullopt;
+    }
+    return canonical;
+}
+
+std::optional<std::filesystem::path> canonicalize_weak_path(const std::filesystem::path& path) {
+    std::error_code fs_error;
+    const auto canonical = std::filesystem::weakly_canonical(path, fs_error);
+    if (fs_error) {
+        return std::nullopt;
+    }
+    return canonical;
+}
+
+std::optional<std::size_t> estimate_base64_decoded_size(const std::string_view encoded) {
+    if (encoded.empty()) {
+        return static_cast<std::size_t>(0U);
+    }
+    const std::size_t len = encoded.size();
+    if ((len % 4U) != 0U) {
+        return std::nullopt;
+    }
+    std::size_t padding = 0U;
+    if (len >= 1U && encoded[len - 1U] == '=') {
+        ++padding;
+    }
+    if (len >= 2U && encoded[len - 2U] == '=') {
+        ++padding;
+    }
+    return (len / 4U) * 3U - padding;
+}
+
 nlohmann::json build_openapi_json(const FrontendApiServerOptions& options) {
     nlohmann::json api = nlohmann::json::object();
     api["openapi"] = "3.0.3";
@@ -250,6 +316,21 @@ nlohmann::json build_openapi_json(const FrontendApiServerOptions& options) {
              {"responses",
               {
                   {"200", {{"description", "Realtime tree response"}}},
+                  {"400", {{"description", "Validation error"}}},
+                  {"401", {{"description", "Unauthorized"}}},
+                  {"404", {{"description", "Host or path not found"}}}
+              }}
+         }}
+    };
+
+    paths[options.realtime_snapshot_path] = {
+        {"post",
+         {
+             {"summary", "Get realtime snapshot metadata with optional path entries"},
+             {"security", nlohmann::json::array({{{"bearerAuth", nlohmann::json::array()}}})},
+             {"responses",
+              {
+                  {"200", {{"description", "Realtime snapshot response"}}},
                   {"400", {{"description", "Validation error"}}},
                   {"401", {{"description", "Unauthorized"}}},
                   {"404", {{"description", "Host or path not found"}}}
@@ -395,12 +476,16 @@ class FrontendApiSharedState final : public std::enable_shared_from_this<Fronten
 public:
     FrontendApiSharedState(FrontendApiServerOptions options,
                            CommandHandler command_handler,
-                           RealtimeTreeHandler realtime_tree_handler);
+                           RealtimeTreeHandler realtime_tree_handler,
+                           RealtimeSnapshotHandler realtime_snapshot_handler);
 
     const FrontendApiServerOptions& options() const noexcept;
     std::string next_request_id();
     common::Status execute_command(const backend::shared::crud::CrudCommandMessage& command);
     common::StatusOr<nlohmann::json> query_realtime_tree(std::string_view host_id, std::string_view path) const;
+    common::StatusOr<nlohmann::json> query_realtime_snapshot(std::string_view host_id,
+                                                             std::string_view path,
+                                                             bool include_entries) const;
     void join(const std::shared_ptr<WebsocketSession>& session);
     void broadcast(std::string payload);
 
@@ -408,6 +493,7 @@ private:
     FrontendApiServerOptions options_ {};
     CommandLoadBalancer load_balancer_;
     RealtimeTreeHandler realtime_tree_handler_ {};
+    RealtimeSnapshotHandler realtime_snapshot_handler_ {};
     std::atomic<std::uint64_t> request_counter_ {0U};
     std::mutex mutex_ {};
     std::vector<std::weak_ptr<WebsocketSession>> sessions_ {};
@@ -708,7 +794,7 @@ private:
                 host_id = body->at("host_id").get<std::string>();
             }
 
-            std::string path = "/";
+            std::string path;
             if (body->contains("path")) {
                 if (!body->at("path").is_string()) {
                     send_json(http::status::bad_request, R"({"ok":false,"message":"path must be a string"})");
@@ -726,6 +812,55 @@ private:
                 return;
             }
             send_json(http::status::ok, tree.value.dump());
+            return;
+        }
+
+        if (request_.method() == http::verb::post && target.path == state_->options().realtime_snapshot_path) {
+            if (!require_auth()) {
+                return;
+            }
+
+            const auto body = parse_json_or_respond();
+            if (!body.has_value()) {
+                return;
+            }
+
+            std::string host_id;
+            if (body->contains("host_id")) {
+                if (!body->at("host_id").is_string()) {
+                    send_json(http::status::bad_request, R"({"ok":false,"message":"host_id must be a string"})");
+                    return;
+                }
+                host_id = body->at("host_id").get<std::string>();
+            }
+
+            std::string path;
+            if (body->contains("path")) {
+                if (!body->at("path").is_string()) {
+                    send_json(http::status::bad_request, R"({"ok":false,"message":"path must be a string"})");
+                    return;
+                }
+                path = body->at("path").get<std::string>();
+            }
+
+            bool include_entries = false;
+            if (body->contains("include_entries")) {
+                if (!body->at("include_entries").is_boolean()) {
+                    send_json(http::status::bad_request, R"({"ok":false,"message":"include_entries must be boolean"})");
+                    return;
+                }
+                include_entries = body->at("include_entries").get<bool>();
+            }
+
+            const auto snapshot = state_->query_realtime_snapshot(host_id, path, include_entries);
+            if (!snapshot.ok()) {
+                nlohmann::json error = nlohmann::json::object();
+                error["ok"] = false;
+                error["message"] = snapshot.status.message;
+                send_json(status_from_error(snapshot.status.code), error.dump());
+                return;
+            }
+            send_json(http::status::ok, snapshot.value.dump());
             return;
         }
 
@@ -749,6 +884,22 @@ private:
                 !std::filesystem::is_regular_file(file_path, fs_error)) {
                 send_json(http::status::not_found, R"({"ok":false,"message":"file not found"})");
                 return;
+            }
+            if (!state_->options().allowed_read_root.empty()) {
+                const auto allowed_root = canonicalize_existing_path(state_->options().allowed_read_root);
+                const auto canonical_file = canonicalize_existing_path(file_path);
+                if (!allowed_root.has_value()) {
+                    send_json(http::status::service_unavailable, R"({"ok":false,"message":"read root is misconfigured"})");
+                    return;
+                }
+                if (!canonical_file.has_value()) {
+                    send_json(http::status::bad_request, R"({"ok":false,"message":"path is invalid"})");
+                    return;
+                }
+                if (!is_path_within_root(*canonical_file, *allowed_root)) {
+                    send_json(http::status::forbidden, R"({"ok":false,"message":"path is outside allowed_read_root"})");
+                    return;
+                }
             }
 
             std::ifstream stream(file_path, std::ios::binary);
@@ -804,8 +955,41 @@ private:
                 send_json(http::status::bad_request, R"({"ok":false,"message":"content_b64 is invalid"})");
                 return;
             }
+            if (decoded->size() > state_->options().max_upload_file_bytes) {
+                send_json(http::status::payload_too_large, R"({"ok":false,"message":"upload exceeds max_upload_file_bytes"})");
+                return;
+            }
+            if (decoded->size() > state_->options().max_upload_total_decoded_bytes) {
+                send_json(
+                    http::status::payload_too_large,
+                    R"({"ok":false,"message":"upload exceeds max_upload_total_decoded_bytes"})"
+                );
+                return;
+            }
 
             const auto target_path = destination_dir / file_name;
+            if (!state_->options().allowed_write_root.empty()) {
+                const auto allowed_root = canonicalize_existing_path(state_->options().allowed_write_root);
+                const auto canonical_target = canonicalize_weak_path(target_path);
+                if (!allowed_root.has_value()) {
+                    send_json(
+                        http::status::service_unavailable,
+                        R"({"ok":false,"message":"write root is misconfigured"})"
+                    );
+                    return;
+                }
+                if (!canonical_target.has_value()) {
+                    send_json(http::status::bad_request, R"({"ok":false,"message":"target path is invalid"})");
+                    return;
+                }
+                if (!is_path_within_root(*canonical_target, *allowed_root)) {
+                    send_json(
+                        http::status::forbidden,
+                        R"({"ok":false,"message":"target path is outside allowed_write_root"})"
+                    );
+                    return;
+                }
+            }
             std::error_code fs_error;
             std::filesystem::create_directories(target_path.parent_path(), fs_error);
             if (fs_error) {
@@ -858,6 +1042,14 @@ private:
 
             std::vector<UploadItem> items;
             items.reserve(body->at("files").size());
+            if (body->at("files").size() > state_->options().max_upload_directory_files) {
+                send_json(
+                    http::status::payload_too_large,
+                    R"({"ok":false,"message":"files count exceeds max_upload_directory_files"})"
+                );
+                return;
+            }
+            std::size_t estimated_total_decoded_bytes = 0U;
             for (const auto& item : body->at("files")) {
                 if (!item.is_object() ||
                     !item.contains("relative_path") || !item.at("relative_path").is_string() ||
@@ -873,15 +1065,47 @@ private:
                     send_json(http::status::bad_request, R"({"ok":false,"message":"relative_path is invalid"})");
                     return;
                 }
+                const auto content_b64 = item.at("content_b64").get<std::string>();
+                const auto estimated_size = estimate_base64_decoded_size(content_b64);
+                if (!estimated_size.has_value()) {
+                    send_json(http::status::bad_request, R"({"ok":false,"message":"content_b64 has invalid length"})");
+                    return;
+                }
+                if (*estimated_size > state_->options().max_upload_file_bytes) {
+                    send_json(
+                        http::status::payload_too_large,
+                        R"({"ok":false,"message":"one file exceeds max_upload_file_bytes"})"
+                    );
+                    return;
+                }
+                if (estimated_total_decoded_bytes > state_->options().max_upload_total_decoded_bytes - *estimated_size) {
+                    send_json(
+                        http::status::payload_too_large,
+                        R"({"ok":false,"message":"request exceeds max_upload_total_decoded_bytes"})"
+                    );
+                    return;
+                }
+                estimated_total_decoded_bytes += *estimated_size;
                 items.push_back(
                     UploadItem {
                         relative.generic_string(),
-                        item.at("content_b64").get<std::string>()
+                        std::move(content_b64)
                     }
                 );
             }
 
             const std::filesystem::path destination_dir = body->at("destination_dir").get<std::string>();
+            std::optional<std::filesystem::path> allowed_write_root;
+            if (!state_->options().allowed_write_root.empty()) {
+                allowed_write_root = canonicalize_existing_path(state_->options().allowed_write_root);
+                if (!allowed_write_root.has_value()) {
+                    send_json(
+                        http::status::service_unavailable,
+                        R"({"ok":false,"message":"write root is misconfigured"})"
+                    );
+                    return;
+                }
+            }
             std::size_t worker_count = std::max<std::size_t>(1U, state_->options().directory_upload_threads);
             if (body->contains("threads")) {
                 if (!body->at("threads").is_number_unsigned() && !body->at("threads").is_number_integer()) {
@@ -901,6 +1125,7 @@ private:
 
             std::atomic<std::size_t> next_index {0U};
             std::atomic<std::size_t> success_count {0U};
+            std::atomic<std::size_t> total_decoded_bytes {0U};
             std::mutex failures_mutex;
             std::vector<nlohmann::json> failures;
 
@@ -923,8 +1148,43 @@ private:
                         );
                         continue;
                     }
+                    if (decoded->size() > state_->options().max_upload_file_bytes) {
+                        std::lock_guard<std::mutex> lock(failures_mutex);
+                        failures.push_back(
+                            {
+                                {"relative_path", item.relative_path},
+                                {"message", "decoded file exceeds max_upload_file_bytes"}
+                            }
+                        );
+                        continue;
+                    }
+                    const auto previous_total = total_decoded_bytes.fetch_add(decoded->size());
+                    if (previous_total > state_->options().max_upload_total_decoded_bytes ||
+                        decoded->size() > state_->options().max_upload_total_decoded_bytes - previous_total) {
+                        std::lock_guard<std::mutex> lock(failures_mutex);
+                        failures.push_back(
+                            {
+                                {"relative_path", item.relative_path},
+                                {"message", "request exceeds max_upload_total_decoded_bytes"}
+                            }
+                        );
+                        continue;
+                    }
 
                     const auto target = destination_dir / std::filesystem::path(item.relative_path);
+                    if (allowed_write_root.has_value()) {
+                        const auto canonical_target = canonicalize_weak_path(target);
+                        if (!canonical_target.has_value() || !is_path_within_root(*canonical_target, *allowed_write_root)) {
+                            std::lock_guard<std::mutex> lock(failures_mutex);
+                            failures.push_back(
+                                {
+                                    {"relative_path", item.relative_path},
+                                    {"message", "target path is outside allowed_write_root"}
+                                }
+                            );
+                            continue;
+                        }
+                    }
                     std::error_code fs_error;
                     std::filesystem::create_directories(target.parent_path(), fs_error);
                     if (fs_error) {
@@ -984,6 +1244,7 @@ private:
             response["total_files"] = items.size();
             response["uploaded_files"] = success_count.load();
             response["failed_files"] = failures.size();
+            response["total_decoded_bytes"] = total_decoded_bytes.load();
             if (!failures.empty()) {
                 response["failures"] = failures;
             }
@@ -1044,7 +1305,8 @@ private:
 
 FrontendApiSharedState::FrontendApiSharedState(FrontendApiServerOptions options,
                                                CommandHandler command_handler,
-                                               RealtimeTreeHandler realtime_tree_handler)
+                                               RealtimeTreeHandler realtime_tree_handler,
+                                               RealtimeSnapshotHandler realtime_snapshot_handler)
     : options_(std::move(options)),
       load_balancer_(
           std::move(command_handler),
@@ -1053,7 +1315,8 @@ FrontendApiSharedState::FrontendApiSharedState(FrontendApiServerOptions options,
               options_.command_max_queue_per_worker,
               options_.command_execution_timeout
           }),
-      realtime_tree_handler_(std::move(realtime_tree_handler)) {
+      realtime_tree_handler_(std::move(realtime_tree_handler)),
+      realtime_snapshot_handler_(std::move(realtime_snapshot_handler)) {
 }
 
 const FrontendApiServerOptions& FrontendApiSharedState::options() const noexcept {
@@ -1078,6 +1341,18 @@ common::StatusOr<nlohmann::json> FrontendApiSharedState::query_realtime_tree(con
         );
     }
     return realtime_tree_handler_(host_id, path);
+}
+
+common::StatusOr<nlohmann::json> FrontendApiSharedState::query_realtime_snapshot(const std::string_view host_id,
+                                                                                  const std::string_view path,
+                                                                                  const bool include_entries) const {
+    if (!realtime_snapshot_handler_) {
+        return common::StatusOr<nlohmann::json>::failure(
+            common::ErrorCode::NotFound,
+            "Realtime snapshot view is not configured."
+        );
+    }
+    return realtime_snapshot_handler_(host_id, path, include_entries);
 }
 
 void FrontendApiSharedState::join(const std::shared_ptr<WebsocketSession>& session) {
@@ -1108,13 +1383,19 @@ void FrontendApiSharedState::broadcast(std::string payload) {
 FrontendApiServer::FrontendApiServer(boost::asio::io_context& io_context,
                                      FrontendApiServerOptions options,
                                      CommandHandler command_handler,
-                                     RealtimeTreeHandler realtime_tree_handler)
+                                     RealtimeTreeHandler realtime_tree_handler,
+                                     RealtimeSnapshotHandler realtime_snapshot_handler)
     : io_context_(io_context),
       acceptor_(io_context),
       options_(std::move(options)),
       command_handler_(std::move(command_handler)),
       realtime_tree_handler_(std::move(realtime_tree_handler)),
-      shared_state_(std::make_shared<FrontendApiSharedState>(options_, command_handler_, realtime_tree_handler_)) {
+      realtime_snapshot_handler_(std::move(realtime_snapshot_handler)),
+      shared_state_(std::make_shared<FrontendApiSharedState>(
+          options_,
+          command_handler_,
+          realtime_tree_handler_,
+          realtime_snapshot_handler_)) {
 }
 
 common::Status FrontendApiServer::start() {
@@ -1126,6 +1407,40 @@ common::Status FrontendApiServer::start() {
         return common::Status::failure(
             common::ErrorCode::InvalidArgument,
             "JWT is required but jwt_secret is empty."
+        );
+    }
+    if (!options_.allowed_read_root.empty()) {
+        std::error_code fs_error;
+        if (!std::filesystem::exists(options_.allowed_read_root, fs_error) || fs_error ||
+            !std::filesystem::is_directory(options_.allowed_read_root, fs_error)) {
+            return common::Status::failure(
+                common::ErrorCode::InvalidArgument,
+                "allowed_read_root must exist and be a directory."
+            );
+        }
+    }
+    if (!options_.allowed_write_root.empty()) {
+        std::error_code fs_error;
+        if (!std::filesystem::exists(options_.allowed_write_root, fs_error) || fs_error ||
+            !std::filesystem::is_directory(options_.allowed_write_root, fs_error)) {
+            return common::Status::failure(
+                common::ErrorCode::InvalidArgument,
+                "allowed_write_root must exist and be a directory."
+            );
+        }
+    }
+    if (options_.max_upload_file_bytes == 0U ||
+        options_.max_upload_directory_files == 0U ||
+        options_.max_upload_total_decoded_bytes == 0U) {
+        return common::Status::failure(
+            common::ErrorCode::InvalidArgument,
+            "Upload limits must be positive values."
+        );
+    }
+    if (options_.max_upload_file_bytes > options_.max_upload_total_decoded_bytes) {
+        return common::Status::failure(
+            common::ErrorCode::InvalidArgument,
+            "max_upload_file_bytes must not exceed max_upload_total_decoded_bytes."
         );
     }
 
@@ -1163,9 +1478,17 @@ common::Status FrontendApiServer::start() {
              << " command=" << options_.command_path
              << " stream=" << options_.stream_path
              << " realtime_tree=" << options_.realtime_tree_path
+             << " realtime_snapshot=" << options_.realtime_snapshot_path
              << " file_download=" << options_.file_download_path
              << " file_upload=" << options_.file_upload_path
              << " directory_upload=" << options_.directory_upload_path
+             << " allowed_read_root="
+             << (options_.allowed_read_root.empty() ? "<unrestricted>" : options_.allowed_read_root.string())
+             << " allowed_write_root="
+             << (options_.allowed_write_root.empty() ? "<unrestricted>" : options_.allowed_write_root.string())
+             << " max_upload_file_bytes=" << options_.max_upload_file_bytes
+             << " max_upload_directory_files=" << options_.max_upload_directory_files
+             << " max_upload_total_decoded_bytes=" << options_.max_upload_total_decoded_bytes
              << " directory_upload_threads=" << options_.directory_upload_threads
              << " jwt_required=" << (options_.require_jwt ? "true" : "false");
         log_api("server", text.str());

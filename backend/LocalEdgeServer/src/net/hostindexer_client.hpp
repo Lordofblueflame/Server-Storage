@@ -8,8 +8,10 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -37,6 +39,9 @@ struct HostIndexerClientOptions {
     std::chrono::milliseconds hot_pull_interval {10};
 
     std::chrono::milliseconds reconnect_delay {1'500};
+    std::chrono::milliseconds reconnect_max_delay {30'000};
+    std::uint32_t reconnect_backoff_factor {2U};
+    std::uint32_t reconnect_jitter_percent {20U};
 };
 
 using CrudResultCallback = std::function<void(const backend::shared::crud::CrudResultMessage&)>;
@@ -73,6 +78,7 @@ private:
     void send_hello();
     void schedule_next_pull(bool had_records);
     void schedule_reconnect(std::string_view reason);
+    std::chrono::milliseconds compute_reconnect_delay() const;
     void flush_pending_commands();
     void notify_connection_state(bool connected, std::string_view message);
 
@@ -98,6 +104,11 @@ private:
     std::deque<std::string> pending_after_hello_ {};
     std::atomic<std::uint64_t> request_sequence_ {0U};
     std::uint64_t last_ack_sequence_ {0U};
+    std::uint64_t reconnect_events_total_ {0U};
+    std::uint64_t reconnect_recoveries_total_ {0U};
+    std::unordered_map<std::string, std::uint64_t> reconnect_reason_counts_ {};
+    std::uint32_t reconnect_attempt_ {0U};
+    mutable std::mt19937 rng_ {std::random_device{}()};
     bool running_ {false};
     bool handshake_complete_ {false};
     bool hello_complete_ {false};
