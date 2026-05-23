@@ -21,7 +21,7 @@ services:
       - --io-threads
       - "2"
     environment:
-      MUNINN_ALLOWED_CLIENT_INSTANCE_ID: ${MUNINN_ALLOWED_CLIENT_INSTANCE_ID:-hugin-gateway-1}
+      MUNINN_ALLOWED_CLIENT_INSTANCE_ID: ${MUNINN_ALLOWED_CLIENT_INSTANCE_ID:-hugin-gateway-*}
       MUNINN_BRIDGE_AUTH_TOKEN: ${MUNINN_BRIDGE_AUTH_TOKEN:?Set MUNINN_BRIDGE_AUTH_TOKEN in .env}
     volumes:
       - watched_data:/data/watched
@@ -36,23 +36,18 @@ services:
     depends_on:
       - muninn
     command:
-      - /app/Hugin/build/dev-release/hugin
-      - --host-id
-      - docker-host
-      - --client-instance-id
-      - ${MUNINN_ALLOWED_CLIENT_INSTANCE_ID:-hugin-gateway-1}
-      - --muninn-host
-      - muninn
-      - --muninn-port
-      - "9460"
-      - --muninn-path
-      - /muninn
-      - --api-address
-      - 0.0.0.0
-      - --api-port
-      - "9440"
-      - --poll-ms
-      - "200"
+      - /bin/sh
+      - -c
+      - >
+        exec /app/Hugin/build/dev-release/hugin
+        --host-id "docker-host-$$(hostname)-$$(date +%s%N)"
+        --client-instance-id "${MUNINN_ALLOWED_CLIENT_INSTANCE_ID:-hugin-gateway-1}"
+        --muninn-host muninn
+        --muninn-port 9460
+        --muninn-path /muninn
+        --api-address 0.0.0.0
+        --api-port 9440
+        --poll-ms 200
     environment:
       HUGIN_JWT_SECRET: ${HUGIN_JWT_SECRET:?Set HUGIN_JWT_SECRET in .env}
       HUGIN_JWT_ISSUER: ${HUGIN_JWT_ISSUER:-}

@@ -214,7 +214,6 @@ void MuninnWebSocketClient::start_connect() {
     write_queue_.clear();
     read_buffer_.consume(read_buffer_.size());
     websocket_ = std::make_unique<WebSocket>(io_context_);
-    log_bridge("resolving muninn endpoint");
 
     resolver_.async_resolve(
         options_.remote_host,
@@ -258,8 +257,6 @@ void MuninnWebSocketClient::on_connect(const boost::system::error_code& error,
         return;
     }
 
-    log_bridge("tcp connected, performing websocket handshake");
-
     websocket_->next_layer().expires_never();
     websocket_->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
     websocket_->set_option(
@@ -290,8 +287,6 @@ void MuninnWebSocketClient::on_handshake(const boost::system::error_code& error)
     }
 
     handshake_complete_ = true;
-    log_bridge("websocket handshake succeeded, sending hello");
-    notify_connection_state(false, "socket_connected_waiting_hello");
     do_read();
     send_hello();
 }
@@ -361,7 +356,6 @@ void MuninnWebSocketClient::handle_message(const std::string_view payload) {
             log_bridge(recovery.str());
         }
         reconnect_attempt_ = 0U;
-        log_bridge("hello acknowledged by muninn");
         notify_connection_state(true, "connected");
         flush_pending_commands();
         if (options_.auto_pull_enabled) {
@@ -422,13 +416,6 @@ void MuninnWebSocketClient::schedule_reconnect(const std::string_view reason) {
     reconnect_reason_counts_[std::string(reason)] += 1U;
     ++reconnect_attempt_;
     const auto delay = compute_reconnect_delay();
-    {
-        std::ostringstream text;
-        text << "scheduling reconnect reason=" << reason
-             << " attempt=" << reconnect_attempt_
-             << " delay_ms=" << delay.count();
-        log_bridge(text.str());
-    }
     notify_connection_state(false, reason);
 
     boost::system::error_code ignored;
@@ -573,7 +560,7 @@ void MuninnWebSocketClient::apply_crud_result(const crud::CrudResultMessage& res
         on_result_(result);
     }
 
-    if (!result.ok || !result.records.empty()) {
+    if (!result.ok) {
         std::ostringstream text;
         text << "crud_result request_id=" << result.request_id
              << " ok=" << (result.ok ? "true" : "false")
@@ -581,7 +568,7 @@ void MuninnWebSocketClient::apply_crud_result(const crud::CrudResultMessage& res
         if (!result.message.empty()) {
             text << " message=" << result.message;
         }
-        log_bridge(text.str());
+        log_bridge_warning(text.str());
     }
 
     std::uint64_t max_sequence = last_ack_sequence_;

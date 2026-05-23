@@ -53,18 +53,6 @@ std::optional<hugin::api::BackpressurePolicy> parse_backpressure_policy(const st
     return std::nullopt;
 }
 
-std::string backpressure_policy_to_text(const hugin::api::BackpressurePolicy policy) {
-    switch (policy) {
-        case hugin::api::BackpressurePolicy::DropOldest:
-            return "drop_oldest";
-        case hugin::api::BackpressurePolicy::DropNewest:
-            return "drop_newest";
-        case hugin::api::BackpressurePolicy::Disconnect:
-            return "disconnect";
-    }
-    return "drop_oldest";
-}
-
 std::string entry_type_text(const muninn::domain::EntryType type) {
     switch (type) {
         case muninn::domain::EntryType::File:
@@ -825,9 +813,17 @@ int main(int argc, char** argv) {
         return hugin::common::StatusOr<nlohmann::json>::success(std::move(response));
     };
 
-    auto on_connection_state = [](const bool connected, const std::string_view message) {
-        std::cout << "[muninn] connected=" << (connected ? "true" : "false")
-                  << " state=" << message << '\n';
+    auto on_connection_state = [last_connected = std::optional<bool>{}](const bool connected,
+                                                                         const std::string_view message) mutable {
+        if (last_connected.has_value() && last_connected.value() == connected) {
+            return;
+        }
+        last_connected = connected;
+        std::cout << "Muninn bridge " << (connected ? "connected" : "disconnected");
+        if (!connected && !message.empty()) {
+            std::cout << " reason=" << message;
+        }
+        std::cout << '\n';
     };
 
     if (start_muninn_client) {
@@ -883,53 +879,22 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    std::cout << "Hugin gateway initialized.\n";
-    std::cout << "  api=http://" << api_options.listen_address << ':' << api_options.port << '\n';
-    std::cout << "  health_path=" << api_options.health_path << '\n';
-    std::cout << "  command_path=" << api_options.command_path << '\n';
-    std::cout << "  stream_path=" << api_options.stream_path << '\n';
-    std::cout << "  openapi_path=" << api_options.openapi_path << '\n';
-    std::cout << "  docs_path=" << api_options.docs_path << '\n';
-    std::cout << "  realtime_tree_path=" << api_options.realtime_tree_path << '\n';
-    std::cout << "  realtime_snapshot_path=" << api_options.realtime_snapshot_path << '\n';
-    std::cout << "  file_download_path=" << api_options.file_download_path << '\n';
-    std::cout << "  file_upload_path=" << api_options.file_upload_path << '\n';
-    std::cout << "  directory_upload_path=" << api_options.directory_upload_path << '\n';
-    std::cout << "  local_access_token_configured=" << (!api_options.local_access_token.empty() ? "true" : "false") << '\n';
-    std::cout << "  max_http_request_body_bytes=" << api_options.max_http_request_body_bytes << '\n';
-    std::cout << "  allowed_read_root="
+    std::cout << "Hugin gateway initialized"
+              << " api=http://" << api_options.listen_address << ':' << api_options.port
+              << " roots(read="
               << (api_options.allowed_read_root.empty() ? "<unrestricted>" : api_options.allowed_read_root.string())
-              << '\n';
-    std::cout << "  allowed_write_root="
+              << ",write="
               << (api_options.allowed_write_root.empty() ? "<unrestricted>" : api_options.allowed_write_root.string())
-              << '\n';
-    std::cout << "  directory_upload_threads=" << api_options.directory_upload_threads << '\n';
-    std::cout << "  max_upload_file_bytes=" << api_options.max_upload_file_bytes << '\n';
-    std::cout << "  max_upload_directory_files=" << api_options.max_upload_directory_files << '\n';
-    std::cout << "  max_upload_total_decoded_bytes=" << api_options.max_upload_total_decoded_bytes << '\n';
-    std::cout << "  jwt_required=" << (api_options.require_jwt ? "true" : "false") << '\n';
-    std::cout << "  ws_backpressure=" << backpressure_policy_to_text(api_options.ws_backpressure_policy) << '\n';
-    std::cout << "  ws_max_pending_messages=" << api_options.ws_max_pending_messages << '\n';
-    std::cout << "  ws_max_pending_bytes=" << api_options.ws_max_pending_bytes << '\n';
-    std::cout << "  command_worker_threads=" << api_options.command_worker_threads << '\n';
-    std::cout << "  command_queue_per_worker=" << api_options.command_max_queue_per_worker << '\n';
-    std::cout << "  command_timeout_ms=" << api_options.command_execution_timeout.count() << '\n';
-    std::cout << "  io_threads=" << io_threads << '\n';
-    std::cout << "  muninn_bridge=" << (muninn_client ? "enabled" : "disabled") << '\n';
+              << ") auth(jwt=" << (api_options.require_jwt ? "true" : "false")
+              << ",local_token=" << (!api_options.local_access_token.empty() ? "true" : "false")
+              << ") body_limit=" << api_options.max_http_request_body_bytes
+              << " bridge=" << (muninn_client ? "enabled" : "disabled");
     if (muninn_client) {
-        std::cout << "  muninn_transport="
-                  << hugin::net::muninn_transport_kind_name(muninn_options.transport_kind) << '\n';
-        std::cout << "  muninn_endpoint=" << muninn_options.remote_host << ':'
-                  << muninn_options.remote_port << muninn_options.websocket_path << '\n';
-        std::cout << "  host_id=" << muninn_options.host_id << '\n';
-        std::cout << "  bridge_auth_token_configured="
-                  << (muninn_options.auth_token.empty() ? "false" : "true") << '\n';
-        std::cout << "  auto_pull=" << (muninn_options.auto_pull_enabled ? "true" : "false") << '\n';
-        std::cout << "  reconnect_delay_ms=" << muninn_options.reconnect_delay.count() << '\n';
-        std::cout << "  reconnect_max_delay_ms=" << muninn_options.reconnect_max_delay.count() << '\n';
-        std::cout << "  reconnect_backoff_factor=" << muninn_options.reconnect_backoff_factor << '\n';
-        std::cout << "  reconnect_jitter_percent=" << muninn_options.reconnect_jitter_percent << '\n';
+        std::cout << " muninn=" << muninn_options.remote_host << ':'
+                  << muninn_options.remote_port << muninn_options.websocket_path
+                  << " auto_pull=" << (muninn_options.auto_pull_enabled ? "true" : "false");
     }
+    std::cout << '\n';
 
     while (!g_stop_requested.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

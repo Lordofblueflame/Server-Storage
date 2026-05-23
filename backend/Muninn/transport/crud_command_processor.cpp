@@ -153,17 +153,6 @@ backend::shared::crud::CrudResultMessage CrudCommandProcessor::process(const cru
             return result;
         }
 
-        const auto compact_status = store_->compact_transport_up_to_min_acked();
-        if (!compact_status.ok()) {
-            result.message = compact_status.message;
-            log_command(
-                logging::LogLevel::Error,
-                command,
-                consumer_id,
-                std::string("compaction failed: ") + result.message
-            );
-            return result;
-        }
     }
 
     if (std::string disabled_message; !remote_mutating_commands_allowed(options_, command, disabled_message)) {
@@ -192,12 +181,6 @@ backend::shared::crud::CrudResultMessage CrudCommandProcessor::process(const cru
             }
             result.ok = true;
             result.message = "ok";
-            {
-                std::ostringstream text;
-                text << "read succeeded: returned_records=" << result.records.size()
-                     << " ack_sequence=" << command.ack_sequence;
-                log_command(logging::LogLevel::Info, command, consumer_id, text.str());
-            }
             return result;
         }
 

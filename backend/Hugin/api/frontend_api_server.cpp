@@ -1576,7 +1576,7 @@ bool FrontendApiServer::running() const noexcept {
 }
 
 void FrontendApiServer::broadcast_crud_result(const backend::shared::crud::CrudResultMessage& result) {
-    if (!result.records.empty() || !result.ok) {
+    if (!result.ok) {
         std::ostringstream text;
         text << "broadcast crud_result request_id=" << result.request_id
              << " ok=" << (result.ok ? "true" : "false")
@@ -1584,11 +1584,7 @@ void FrontendApiServer::broadcast_crud_result(const backend::shared::crud::CrudR
         if (!result.message.empty()) {
             text << " message=" << result.message;
         }
-        if (result.ok) {
-            log_api("ws", text.str());
-        } else {
-            log_api_warning("ws", text.str());
-        }
+        log_api_warning("ws", text.str());
     }
     shared_state_->broadcast(to_frontend_stream_event_json(result).dump());
 }

@@ -73,6 +73,18 @@ const char* security_mode_name(const TransportSecurityMode mode) {
     return "dev";
 }
 
+bool client_instance_allowed(const std::string& configured_pattern, const std::string& client_instance_id) {
+    if (configured_pattern.empty()) {
+        return true;
+    }
+    if (configured_pattern.back() == '*') {
+        const std::string_view prefix(configured_pattern.data(), configured_pattern.size() - 1U);
+        return client_instance_id.size() >= prefix.size() &&
+               std::string_view(client_instance_id.data(), prefix.size()) == prefix;
+    }
+    return client_instance_id == configured_pattern;
+}
+
 std::optional<std::string> validate_bridge_auth_token(const crud::HelloMessage& hello,
                                                       const WebsocketCrudServerOptions& options) {
     if (options.security_mode == TransportSecurityMode::Prod) {
@@ -131,9 +143,6 @@ public:
             peer_endpoint_ = "unknown";
         }
 
-        std::ostringstream text;
-        text << "session=" << session_id_ << " peer=" << peer_endpoint_ << " connected";
-        log_ws("session", text.str());
     }
 
     void run() {
@@ -337,9 +346,6 @@ private:
             log_ws_error("session", text.str());
             return;
         }
-        std::ostringstream text;
-        text << "session=" << session_id_ << " websocket upgrade accepted";
-        log_ws("session", text.str());
         do_read();
     }
 
@@ -352,9 +358,6 @@ private:
 
     void on_read(const beast::error_code& error, const std::size_t) {
         if (error == websocket::error::closed) {
-            std::ostringstream text;
-            text << "session=" << session_id_ << " closed by peer";
-            log_ws("session", text.str());
             return;
         }
         if (error) {
@@ -456,8 +459,7 @@ private:
             return;
         }
 
-        if (!options_.allowed_client_instance_id.empty() &&
-            hello->client_instance_id != options_.allowed_client_instance_id) {
+        if (!client_instance_allowed(options_.allowed_client_instance_id, hello->client_instance_id)) {
             ack.accepted = false;
             ack.reason = "client_instance_id is not allowed.";
             std::ostringstream text;
@@ -496,13 +498,6 @@ private:
         peer_host_id_ = hello->host_id;
         peer_client_instance_id_ = hello->client_instance_id;
         consumer_id_ = consumer_id;
-        {
-            std::ostringstream text;
-            text << "session=" << session_id_ << " hello accepted host_id=" << peer_host_id_
-                 << " client_instance_id=" << hello->client_instance_id
-                 << " consumer_id=" << consumer_id_;
-            log_ws("protocol", text.str());
-        }
         ack.accepted = true;
         ack.reason.clear();
         enqueue_json(crud::to_json(ack));
@@ -532,20 +527,6 @@ private:
                  << " ack_sequence=" << ingest_ack->ack_sequence
                  << " message=" << ack_status.message;
             log_ws("store", text.str());
-        } else {
-            std::ostringstream text;
-            text << "session=" << session_id_
-                 << " consumer_id=" << consumer_id_
-                 << " acked transport until sequence=" << ingest_ack->ack_sequence;
-            log_ws("store", text.str());
-
-            const auto compact_status = store_.compact_transport_up_to_min_acked();
-            if (!compact_status.ok()) {
-                std::ostringstream compact_text;
-                compact_text << "session=" << session_id_
-                             << " compact_transport_up_to_min_acked failed message=" << compact_status.message;
-                log_ws("store", compact_text.str());
-            }
         }
     }
 
@@ -560,7 +541,7 @@ private:
         }
 
         const auto result = command_processor_.process(*command, consumer_id_);
-        if (command->operation != crud::Operation::Read || !result.ok || !result.records.empty()) {
+        if (command->operation != crud::Operation::Read || !result.ok) {
             std::ostringstream text;
             text << "session=" << session_id_
                  << " request_id=" << command->request_id

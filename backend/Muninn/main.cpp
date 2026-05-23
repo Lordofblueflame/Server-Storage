@@ -618,10 +618,7 @@ int main(int argc, char** argv) {
                         watch_base_snapshot_id = update.snapshot_build.snapshot.snapshot_id;
                         watch_capture_ok = true;
                         const auto delta_change_count = count_delta_changes(update.computed_delta);
-                        if (delta_change_count == 0U && watch_base_snapshot_id == base_snapshot_id) {
-                            std::cout << "[CORE-WATCH] no filesystem changes detected base_snapshot_id="
-                                      << base_snapshot_id << '\n';
-                        } else {
+                        if (delta_change_count > 0U || watch_base_snapshot_id != base_snapshot_id) {
                             std::cout << "[CORE-WATCH] incremental snapshot captured base_snapshot_id="
                                       << base_snapshot_id
                                       << " target_snapshot_id=" << watch_base_snapshot_id
@@ -790,34 +787,16 @@ int main(int argc, char** argv) {
             });
         }
 
-        std::cout << "Muninn CRUD transport server started.\n";
-        std::cout << "  transport="
-                  << muninn::transport::crud_transport_kind_name(server_options.transport_kind) << '\n';
-        std::cout << "  db=" << db_path->string() << '\n';
-        std::cout << "  listen=" << listen_address << ':' << listen_port << websocket_path << '\n';
-        std::cout << "  health_endpoint=http://" << listen_address << ':' << listen_port << "/healthz\n";
-        std::cout << "  readiness_endpoint=http://" << listen_address << ':' << listen_port << "/readyz\n";
-        std::cout << "  metrics_endpoint=http://" << listen_address << ':' << listen_port << "/metrics\n";
-        if (default_root_path.has_value()) {
-            std::cout << "  default_root=" << default_root_path->string() << '\n';
-        }
-        std::cout << "  io_threads=" << io_threads << '\n';
-        std::cout << "  outbox_batch=" << outbox_batch_size << '\n';
-        std::cout << "  metrics_log_interval_seconds=" << metrics_log_interval_seconds << '\n';
-        std::cout << "  watch_interval_seconds=" << watch_interval_seconds << '\n';
-        std::cout << "  watch_enabled=" << (watch_enabled ? "true" : "false") << '\n';
-        std::cout << "  scan_follow_symlinks=" << (scan_options.follow_symlinks ? "true" : "false") << '\n';
-        std::cout << "  scan_max_entries=" << scan_options.max_entries << '\n';
-        std::cout << "  scan_include_globs=" << scan_options.include_globs.size() << '\n';
-        std::cout << "  scan_exclude_globs=" << scan_options.exclude_globs.size() << '\n';
-        std::cout << "  retention_keep_latest_snapshots=" << retention_keep_latest_snapshots << '\n';
-        std::cout << "  security_mode=" << security_mode_to_string(security_mode) << '\n';
-        std::cout << "  allow_plain_websocket_in_prod=" << (allow_plain_websocket_in_prod ? "true" : "false") << '\n';
-        std::cout << "  allow_remote_mutating_commands="
-                  << (allow_remote_mutating_commands ? "true" : "false") << '\n';
-        std::cout << "  bootstrap_create=" << (bootstrap_create ? "true" : "false") << '\n';
-        std::cout << "  allowed_client_instance_id=" << allowed_client_instance_id << '\n';
-        std::cout << "  bridge_auth_token_configured=" << (bridge_auth_token.empty() ? "false" : "true") << '\n';
+        std::cout << "Muninn CRUD transport server started"
+                  << " transport=" << muninn::transport::crud_transport_kind_name(server_options.transport_kind)
+                  << " listen=" << listen_address << ':' << listen_port << websocket_path
+                  << " db=" << db_path->string()
+                  << " default_root=" << (default_root_path.has_value() ? default_root_path->string() : "<none>")
+                  << " watch=" << (watch_enabled ? std::to_string(watch_interval_seconds) + "s" : "disabled")
+                  << " io_threads=" << io_threads
+                  << " security_mode=" << security_mode_to_string(security_mode)
+                  << " bridge_auth_token_configured=" << (bridge_auth_token.empty() ? "false" : "true")
+                  << '\n';
 
         auto last_metrics_log_at = std::chrono::steady_clock::now();
         auto last_watch_run_at = std::chrono::steady_clock::now();
@@ -854,10 +833,7 @@ int main(int argc, char** argv) {
                         watch_base_snapshot_id = update.snapshot_build.snapshot.snapshot_id;
                         watch_capture_ok = true;
                         const auto delta_change_count = count_delta_changes(update.computed_delta);
-                        if (delta_change_count == 0U && watch_base_snapshot_id == base_snapshot_id) {
-                            std::cout << "[WATCH] no filesystem changes detected base_snapshot_id="
-                                      << base_snapshot_id << '\n';
-                        } else {
+                        if (delta_change_count > 0U || watch_base_snapshot_id != base_snapshot_id) {
                             std::cout << "[WATCH] incremental snapshot captured base_snapshot_id="
                                       << base_snapshot_id
                                       << " target_snapshot_id=" << watch_base_snapshot_id
