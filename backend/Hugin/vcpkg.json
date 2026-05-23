@@ -1,0 +1,14 @@
+{
+  "name": "hugin",
+  "version-string": "0.2.0",
+  "description": "Stateless gateway API and websocket bridge for Muninn.",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "boost-system",
+    "boost-throw-exception",
+    "jwt-cpp",
+    "nlohmann-json",
+    "openssl"
+  ]
+}

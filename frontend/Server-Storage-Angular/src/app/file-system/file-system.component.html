@@ -1,18 +1,100 @@
-<div *ngIf="errorMessage; else content">
-    <p class="error">{{ errorMessage }}</p>
-  </div>
-  
-  <ng-template #content>
-    <div *ngIf="currentDirectory; else loading">
-      <app-display-file-system
-      [currentDirectory] = "currentDirectory"
-      [currentDirectories] = "currentDirectories"
-      [currentFiles] = "currentFiles"
-      (directoryChange)="navigateToSubdirectory($event)">
-    </app-display-file-system>
+<main class="shell">
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Docker MVP</p>
+      <h1>Server Storage</h1>
+      <p class="lede">
+        Browse Muninn's materialized filesystem view through Hugin. This UI uses a local bearer token, not a login flow.
+      </p>
     </div>
-    
-    <ng-template #loading>
-      <p>Loading directory...</p>
-    </ng-template>
-  </ng-template>
+    <div class="health" [class.offline]="health !== 'healthy'">
+      <span>Hugin</span>
+      <strong>{{ health }}</strong>
+    </div>
+  </section>
+
+  <section class="panel token-panel">
+    <label for="token">Local access token</label>
+    <div class="token-row">
+      <input
+        id="token"
+        name="token"
+        type="password"
+        [(ngModel)]="token"
+        placeholder="Paste HUGIN_LOCAL_ACCESS_TOKEN"
+        autocomplete="off">
+      <button type="button" (click)="connect()" [disabled]="isBusy">Connect</button>
+      <button type="button" class="secondary" (click)="checkHealth()" [disabled]="isBusy">Health</button>
+    </div>
+  </section>
+
+  <section class="panel controls">
+    <div>
+      <span class="label">Host</span>
+      <strong>{{ hostId || 'not connected' }}</strong>
+    </div>
+    <div>
+      <span class="label">Directory</span>
+      <strong>{{ currentDirectory || rootPath || 'waiting for snapshot' }}</strong>
+    </div>
+    <div class="actions">
+      <button type="button" class="secondary" (click)="goParent()" [disabled]="isBusy || !currentDirectory || currentDirectory === rootPath">
+        Up
+      </button>
+      <button type="button" class="secondary" (click)="loadDirectory(currentDirectory || rootPath)" [disabled]="isBusy || !hostId">
+        Refresh
+      </button>
+    </div>
+  </section>
+
+  <p *ngIf="statusMessage" class="status">{{ statusMessage }}</p>
+  <p *ngIf="errorMessage" class="error">{{ errorMessage }}</p>
+
+  <section class="content-grid">
+    <div class="panel explorer">
+      <div class="explorer-header">
+        <h2>Files</h2>
+        <span>{{ entries.length }} item(s)</span>
+      </div>
+
+      <button
+        type="button"
+        class="entry"
+        *ngFor="let entry of entries"
+        [class.directory]="entry.type === 'directory'"
+        [class.selected]="selectedFile?.path === entry.path"
+        (click)="selectEntry(entry)">
+        <span class="entry-icon">{{ entry.type === 'directory' ? 'DIR' : 'FILE' }}</span>
+        <span>
+          <strong>{{ entry.name || entry.path }}</strong>
+          <small>{{ entry.path }}</small>
+        </span>
+        <span class="entry-meta">{{ entry.type === 'directory' ? 'folder' : formatSize(entry.size_bytes) }}</span>
+      </button>
+
+      <p *ngIf="!entries.length && hostId" class="empty">No entries in this directory yet.</p>
+      <p *ngIf="!hostId" class="empty">Connect with a local token to load the latest snapshot.</p>
+    </div>
+
+    <aside class="panel side">
+      <h2>Upload Text File</h2>
+      <label for="fileName">File name</label>
+      <input id="fileName" name="fileName" [(ngModel)]="uploadFileName" autocomplete="off">
+
+      <label for="content">Content</label>
+      <textarea id="content" name="content" [(ngModel)]="uploadContent" rows="8"></textarea>
+
+      <button type="button" (click)="uploadTextFile()" [disabled]="isBusy || !currentDirectory">
+        Upload to current directory
+      </button>
+
+      <div class="download">
+        <h2>Selected File</h2>
+        <p>{{ selectedFile?.path || 'No file selected' }}</p>
+        <button type="button" class="secondary" (click)="downloadSelected()" [disabled]="isBusy || !selectedFile">
+          Download
+        </button>
+      </div>
+    </aside>
+  </section>
+</main>

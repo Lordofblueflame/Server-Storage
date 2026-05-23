@@ -1,5 +1,5 @@
-build-localedge/
-build-hostindexer/
+build-hugin/
+build-muninn/
 **/build/
 **/cmake-build-*/
 .git/

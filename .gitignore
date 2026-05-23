@@ -74,6 +74,9 @@ node_modules/
 # Logs
 logs/
 backend/logs/
+dump/
+backend/FUTURE_AI_GUIDE.md
+backend/**/FUTURE_IMPROVEMENTS.txt
 
 # Vendor libraries (default: ignore)
 backend/HostIndexer/lib/*

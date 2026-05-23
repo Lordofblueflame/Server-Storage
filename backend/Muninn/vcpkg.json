@@ -1,0 +1,14 @@
+{
+  "name": "muninn",
+  "version-string": "0.3.0",
+  "description": "Layered C++20 filesystem indexing engine.",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "boost-system",
+    "boost-throw-exception",
+    "gtest",
+    "lmdb",
+    "nlohmann-json"
+  ]
+}

@@ -1,12 +1,11 @@
 import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { FileSystemComponent } from './file-system/file-system.component';
-import { HttpClientModule } from '@angular/common/http';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, FileSystemComponent, HttpClientModule],
+  imports: [RouterOutlet, FileSystemComponent],
   templateUrl: './app.component.html',
   styleUrl: './app.component.css'
 })

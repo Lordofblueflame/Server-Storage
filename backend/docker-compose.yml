@@ -1,10 +1,10 @@
 services:
-  hostindexer:
+  muninn:
     build:
       context: .
-      dockerfile: HostIndexer/Dockerfile
+      dockerfile: Muninn/Dockerfile
     command:
-      - /tmp/build-hostindexer/host_indexer_cli
+      - /app/Muninn/build/dev-release/muninn_cli
       - --serve
       - --db
       - /data/hostindex
@@ -13,37 +13,40 @@ services:
       - --listen-port
       - "9460"
       - --ws-path
-      - /hostindexer
+      - /muninn
       - --default-root
-      - /app/HostIndexer
+      - /data/watched
+      - --watch-interval-seconds
+      - "2"
       - --io-threads
       - "2"
     environment:
-      HOSTINDEXER_ALLOWED_CLIENT_INSTANCE_ID: ${HOSTINDEXER_ALLOWED_CLIENT_INSTANCE_ID:-localedge-gateway-1}
-      HOSTINDEXER_BRIDGE_AUTH_TOKEN: ${HOSTINDEXER_BRIDGE_AUTH_TOKEN:?Set HOSTINDEXER_BRIDGE_AUTH_TOKEN in .env}
+      MUNINN_ALLOWED_CLIENT_INSTANCE_ID: ${MUNINN_ALLOWED_CLIENT_INSTANCE_ID:-hugin-gateway-1}
+      MUNINN_BRIDGE_AUTH_TOKEN: ${MUNINN_BRIDGE_AUTH_TOKEN:?Set MUNINN_BRIDGE_AUTH_TOKEN in .env}
     volumes:
-      - hostindexer_data:/data/hostindex
+      - watched_data:/data/watched
+      - muninn_data:/data/hostindex
     networks:
       - backend_net
 
-  localedge:
+  hugin:
     build:
       context: .
-      dockerfile: LocalEdgeServer/Dockerfile
+      dockerfile: Hugin/Dockerfile
     depends_on:
-      - hostindexer
+      - muninn
     command:
-      - /tmp/build-localedge/localedge_server
+      - /app/Hugin/build/dev-release/hugin
       - --host-id
       - docker-host
       - --client-instance-id
-      - ${HOSTINDEXER_ALLOWED_CLIENT_INSTANCE_ID:-localedge-gateway-1}
-      - --hostindexer-host
-      - hostindexer
-      - --hostindexer-port
+      - ${MUNINN_ALLOWED_CLIENT_INSTANCE_ID:-hugin-gateway-1}
+      - --muninn-host
+      - muninn
+      - --muninn-port
       - "9460"
-      - --hostindexer-path
-      - /hostindexer
+      - --muninn-path
+      - /muninn
       - --api-address
       - 0.0.0.0
       - --api-port
@@ -51,17 +54,55 @@ services:
       - --poll-ms
       - "200"
     environment:
-      LOCALEDGE_JWT_SECRET: ${LOCALEDGE_JWT_SECRET:?Set LOCALEDGE_JWT_SECRET in .env}
-      LOCALEDGE_JWT_ISSUER: ${LOCALEDGE_JWT_ISSUER:-}
-      LOCALEDGE_JWT_AUDIENCE: ${LOCALEDGE_JWT_AUDIENCE:-}
-      HOSTINDEXER_BRIDGE_AUTH_TOKEN: ${HOSTINDEXER_BRIDGE_AUTH_TOKEN:?Set HOSTINDEXER_BRIDGE_AUTH_TOKEN in .env}
+      HUGIN_JWT_SECRET: ${HUGIN_JWT_SECRET:?Set HUGIN_JWT_SECRET in .env}
+      HUGIN_JWT_ISSUER: ${HUGIN_JWT_ISSUER:-}
+      HUGIN_JWT_AUDIENCE: ${HUGIN_JWT_AUDIENCE:-}
+      HUGIN_LOCAL_ACCESS_TOKEN: ${HUGIN_LOCAL_ACCESS_TOKEN:?Set HUGIN_LOCAL_ACCESS_TOKEN in .env}
+      HUGIN_MAX_HTTP_REQUEST_BODY_BYTES: ${HUGIN_MAX_HTTP_REQUEST_BODY_BYTES:-8388608}
+      HUGIN_ALLOWED_READ_ROOT: /data/watched
+      HUGIN_ALLOWED_WRITE_ROOT: /data/watched
+      MUNINN_BRIDGE_AUTH_TOKEN: ${MUNINN_BRIDGE_AUTH_TOKEN:?Set MUNINN_BRIDGE_AUTH_TOKEN in .env}
     ports:
       - "9440:9440"
+    volumes:
+      - watched_data:/data/watched
+    networks:
+      - backend_net
+
+  frontend:
+    build:
+      context: ../frontend/Server-Storage-Angular
+      dockerfile: Dockerfile
+    depends_on:
+      - hugin
+    ports:
+      - "8080:80"
+    networks:
+      - backend_net
+
+  smoke-tests:
+    image: python:3.12-alpine
+    profiles:
+      - test
+    depends_on:
+      - hugin
+    command:
+      - python
+      - /tests/smoke_test.py
+    environment:
+      HUGIN_BASE_URL: http://hugin:9440
+      HUGIN_JWT_SECRET: ${HUGIN_JWT_SECRET:?Set HUGIN_JWT_SECRET in .env}
+      HUGIN_JWT_ISSUER: ${HUGIN_JWT_ISSUER:-}
+      HUGIN_JWT_AUDIENCE: ${HUGIN_JWT_AUDIENCE:-}
+      HUGIN_LOCAL_ACCESS_TOKEN: ${HUGIN_LOCAL_ACCESS_TOKEN:?Set HUGIN_LOCAL_ACCESS_TOKEN in .env}
+    volumes:
+      - ./tests:/tests:ro
     networks:
       - backend_net
 
 volumes:
-  hostindexer_data:
+  watched_data:
+  muninn_data:
 
 networks:
   backend_net:
